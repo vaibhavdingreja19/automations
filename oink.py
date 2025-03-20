@@ -11,10 +11,11 @@ def run_cmd(cmd, cwd=None):
     return result.stdout.strip()
 
 def file_exists_in_branch(branch, file_path, repo_path):
-    # Check if file exists in a given branch
+    # Check if file exists in a given branch (Windows-friendly, no grep)
     try:
-        run_cmd(f"git ls-tree -r --name-only {branch} | grep '^{file_path}$'", cwd=repo_path)
-        return True
+        output = run_cmd(f"git ls-tree -r --name-only {branch}", cwd=repo_path)
+        files = output.splitlines()
+        return file_path in files
     except:
         return False
 
@@ -83,7 +84,7 @@ def automate_git_merge(pat_token, org, repo, branch_a, branch_b, files_to_exclud
 
 # Example usage
 if __name__ == "__main__":
-    pat_token = "ghp_xxx"  # replace with your token
+    pat_token = ""  # Your actual token
     org = "JHDevOps"
     repo = "merge_testing_repo"
     branch_a = "develop"
