@@ -4,7 +4,7 @@ import pandas as pd
 
 # GitHub organization and personal access token
 ORG_NAME = "JHDevOps"
-GITHUB_PAT = ""  # Replace with your PAT
+GITHUB_PAT = "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"  # Replace with your PAT
 
 # GitHub API headers
 HEADERS = {
