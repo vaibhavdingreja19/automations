@@ -39,17 +39,19 @@ def save_to_excel(repo_branch_map):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Repos & Branches"
-    ws.append(["Repo Name", "Branch Name", "Is Default Branch"])
+    ws.append(["Repo Name", "Branch Name", "Repo URL"])
 
-    for repo, (branches, default_branch) in repo_branch_map.items():
+    for repo, (branches, default_branch, repo_url) in repo_branch_map.items():
         first = True
         for branch in branches:
-            is_default = "default" if branch["name"] == default_branch else ""
+            branch_name = branch["name"]
+            if branch_name == default_branch:
+                branch_name += " (default)"
             if first:
-                ws.append([repo, branch["name"], is_default])
+                ws.append([repo, branch_name, repo_url])
                 first = False
             else:
-                ws.append(["", branch["name"], is_default])
+                ws.append(["", branch_name, ""])
 
     # Auto-width columns
     for column_cells in ws.columns:
@@ -68,9 +70,10 @@ def main():
     for repo in repos:
         name = repo["name"]
         default_branch = repo.get("default_branch", "")
+        html_url = repo.get("html_url", f"https://github.com/{ORG_NAME}/{name}")
         print(f"Fetching branches for repo: {name}")
         branches = get_branches(name)
-        repo_branch_map[name] = (branches, default_branch)
+        repo_branch_map[name] = (branches, default_branch, html_url)
 
     print("Saving to Excel...")
     save_to_excel(repo_branch_map)
