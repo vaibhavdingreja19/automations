@@ -3,6 +3,7 @@ import subprocess
 import shutil
 import requests
 import tempfile
+import time
 from dateutil import parser as dateparser
 
 GITHUB_API = "https://api.github.com"
@@ -19,7 +20,7 @@ def get_branches(repo_path):
 
 def get_commit_before_date(repo_path, branch, target_date):
     try:
-        # Try to find a commit before the given date
+        # Try to find commit before the given date
         cmd = f"git rev-list -n 1 --before=\"{target_date}\" origin/{branch}"
         commit = subprocess.check_output(cmd, shell=True, cwd=repo_path).decode().strip()
         if not commit:
@@ -41,6 +42,18 @@ def create_github_repo(org, repo_name, token):
     print(f"[+] Created new repo: {repo_name}")
     return response.json()["clone_url"].replace("https://", f"https://{token}@")
 
+def windows_safe_delete(path):
+    # Uses robocopy to overwrite with empty directory, then deletes
+    try:
+        empty_dir = os.path.join(tempfile.gettempdir(), "empty_folder")
+        os.makedirs(empty_dir, exist_ok=True)
+        robocopy_cmd = f'robocopy "{empty_dir}" "{path}" /MIR'
+        subprocess.run(robocopy_cmd, shell=True, check=False, stdout=subprocess.DEVNULL)
+        shutil.rmtree(path, ignore_errors=True)
+        print("[✓] Temporary folder cleaned up.")
+    except Exception as e:
+        print(f"[!] Could not fully clean temp folder: {e}")
+
 def main(old_repo, new_repo, date_str, org, token):
     target_date = dateparser.parse(date_str).isoformat()
     temp_dir = tempfile.mkdtemp()
@@ -59,6 +72,12 @@ def main(old_repo, new_repo, date_str, org, token):
     run("git fetch --all", cwd=repo_path)
 
     branches = get_branches(repo_path)
+
+    # Ensure 'main' or 'master' isn't skipped
+    for b in ["main", "master"]:
+        if b not in branches and os.path.exists(os.path.join(repo_path, ".git", "refs", "remotes", "origin", b)):
+            branches.append(b)
+
     print(f"[+] Found remote branches: {branches}")
 
     created_branches = []
@@ -94,7 +113,8 @@ def main(old_repo, new_repo, date_str, org, token):
     print(f"[!] Skipped branches: {skipped_branches}")
     print(f"[+] Repo created: https://github.com/{org}/{new_repo}")
 
-    shutil.rmtree(temp_dir)
+    # Step 7: Clean up safely
+    windows_safe_delete(temp_dir)
 
 # === CONFIGURATION ===
 if __name__ == "__main__":
