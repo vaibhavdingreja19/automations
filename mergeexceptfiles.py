@@ -1,8 +1,7 @@
 import os
 import subprocess
 import shutil
-import sys
-from git import Repo
+from git import Repo, GitCommandError
 
 def merge_branches_excluding_files(pat_token, repo_name, branch1, branch2, exception_files):
     org = "JHDevOps"
@@ -16,46 +15,51 @@ def merge_branches_excluding_files(pat_token, repo_name, branch1, branch2, excep
     print("Cloning repository...")
     repo = Repo.clone_from(repo_url, clone_dir)
 
-    # Set up repo and fetch
     git = repo.git
     git.fetch('--all')
-    
+
     repo.git.checkout(branch1)
     print(f"Checked out to {branch1}.")
 
     try:
         print(f"Merging {branch2} into {branch1} with no commit...")
         git.merge(branch2, '--no-commit', '--no-ff')
-    except Exception as e:
-        print(f"Merge conflict or issue: {e}")
-        # Optionally handle auto-merging or re-raise
-        raise
+    except GitCommandError as e:
+        print("Merge conflict detected. Attempting to auto-resolve for exception files only...")
 
-    # Revert exception files to branch1 state
-    for file in exception_files:
-        if os.path.exists(os.path.join(clone_dir, file)):
-            print(f"Resetting exception file: {file}")
-            git.checkout(f"HEAD", "--", file)
+        # Resolve conflicts only for exception files
+        for file in exception_files:
+            try:
+                print(f"Handling exception file: {file}")
+                git.checkout('--ours', file)  # Keep version from branch1
+                git.add(file)
+            except GitCommandError:
+                print(f"Warning: Could not auto-resolve {file}. Manual fix might be needed.")
 
-    # Finalize merge
-    repo.index.commit(f"Merge {branch2} into {branch1} excluding {exception_files}")
-    print("Merge committed.")
+        # Now attempt to commit
+        try:
+            repo.index.commit(f"Auto-merge {branch2} into {branch1}, excluding {exception_files}")
+            print("Merge committed successfully.")
+        except Exception as commit_error:
+            print(f"Failed to commit merge: {commit_error}")
+            raise
 
-    print("Pushing changes...")
+    print("Pushing merged branch...")
     origin = repo.remote(name='origin')
     origin.push(branch1)
-    print("Push successful.")
+    print("Push complete.")
 
     # Cleanup
     shutil.rmtree(clone_dir)
+    print("Local clone cleaned up.")
 
-# Example usage
+# ------------------ Example Usage ------------------
+
 if __name__ == "__main__":
-    # These should come from secure input (or args)
-    pat_token = "ghp_yourtokenhere"
+    pat_token = "ghp_your_token_here"
     repo_name = "your-repo-name"
     branch1 = "main"
     branch2 = "feature-branch"
-    exception_files = ["README.md", "config/settings.json"]  # paths relative to repo root
+    exception_files = ["clearingazure.py", "README.md"]  # Files to be excluded from merge
 
     merge_branches_excluding_files(pat_token, repo_name, branch1, branch2, exception_files)
