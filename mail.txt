@@ -1,0 +1,22 @@
+Dear [Client’s Name],
+
+I hope you’re doing well.
+
+As discussed earlier, our team has been investigating the intermittent failures of the auto-merge functionality via TeamCity using the GitHub App integration. We raised this issue with the TeamCity vendor, and they have analyzed the logs we provided.
+
+Based on their response, the failures may be linked to issues with GitHub App installation tokens. These tokens can sometimes fail to refresh or be issued—particularly when:
+	•	The GitHub App settings are modified on GitHub’s end.
+	•	Tokens are reused across multiple VCS roots or with differing fetch URLs.
+	•	The repository is restricted in a way that prevents token access.
+
+The vendor has suggested capturing additional debug-level logs for the affected VCS roots to identify the exact cause. However, we currently have the plugin-buildEvents-logConfig.xml set to debug level for other ongoing reports. We are therefore evaluating how we can enable multiple specific debug log presets without impacting our existing configurations.
+
+In parallel, they mentioned a workaround using the “acquire new” action in the VCS root settings to generate a fresh token. While this is not recommended for regular use (as it creates new database entries), we are considering this as a reconfiguration step if needed.
+
+We will continue monitoring and share any concrete findings or resolutions as we proceed with debugging.
+
+Please let us know if you have any questions or require further details.
+
+Kind regards,
+Vaibhav Dingreja
+[Your Team/Organization Name]
