@@ -1,127 +1,126 @@
 import os
-import subprocess
 import shutil
+import subprocess
 import requests
-import tempfile
-import time
-from dateutil import parser as dateparser
-
-GITHUB_API = "https://api.github.com"
-
-def run(cmd, cwd=None):
-    print(f"Running: {cmd}")
-    subprocess.run(cmd, cwd=cwd, shell=True, check=True)
-
-def get_branches(repo_path):
-    result = subprocess.check_output("git branch -r", shell=True, cwd=repo_path)
-    branches = result.decode().strip().split("\n")
-    clean = [b.strip().replace("origin/", "") for b in branches if "->" not in b]
-    return list(set(clean))
-
-def get_commit_before_date(repo_path, branch, target_date):
-    try:
-        # Try to find commit before the given date
-        cmd = f"git rev-list -n 1 --before=\"{target_date}\" origin/{branch}"
-        commit = subprocess.check_output(cmd, shell=True, cwd=repo_path).decode().strip()
-        if not commit:
-            # Fallback: first commit of the branch
-            cmd = f"git rev-list --max-parents=0 origin/{branch}"
-            commit = subprocess.check_output(cmd, shell=True, cwd=repo_path).decode().strip()
-            print(f"!! No commit before {target_date} on '{branch}', using first commit: {commit}")
-        return commit
-    except subprocess.CalledProcessError:
-        print(f"!! Skipping branch '{branch}' — could not resolve commit or branch is broken")
-        return None
-
-def create_github_repo(org, repo_name, token):
-    url = f"{GITHUB_API}/orgs/{org}/repos"
-    headers = {"Authorization": f"token {token}"}
-    data = {"name": repo_name, "private": True}
-    response = requests.post(url, json=data, headers=headers)
-    response.raise_for_status()
-    print(f"[+] Created new repo: {repo_name}")
-    return response.json()["clone_url"].replace("https://", f"https://{token}@")
-
-def windows_safe_delete(path):
-    # Uses robocopy to overwrite with empty directory, then deletes
-    try:
-        empty_dir = os.path.join(tempfile.gettempdir(), "empty_folder")
-        os.makedirs(empty_dir, exist_ok=True)
-        robocopy_cmd = f'robocopy "{empty_dir}" "{path}" /MIR'
-        subprocess.run(robocopy_cmd, shell=True, check=False, stdout=subprocess.DEVNULL)
-        shutil.rmtree(path, ignore_errors=True)
-        print("[✓] Temporary folder cleaned up.")
-    except Exception as e:
-        print(f"[!] Could not fully clean temp folder: {e}")
-
-def main(old_repo, new_repo, date_str, org, token):
-    target_date = dateparser.parse(date_str).isoformat()
-    temp_dir = tempfile.mkdtemp()
-    os.chdir(temp_dir)
-
-    # Step 1: Clone the original repo (mirror to get full refs)
-    run(f"git clone --mirror https://{token}@github.com/{org}/{old_repo}.git")
-    mirror_path = os.path.join(temp_dir, f"{old_repo}.git")
-
-    # Step 2: Clone the mirror repo into working directory
-    run(f"git clone {mirror_path} {new_repo}")
-    repo_path = os.path.join(temp_dir, new_repo)
-    os.chdir(repo_path)
-
-    # Step 3: Fetch all branches
-    run("git fetch --all", cwd=repo_path)
-
-    branches = get_branches(repo_path)
-
-    # Ensure 'main' or 'master' isn't skipped
-    for b in ["main", "master"]:
-        if b not in branches and os.path.exists(os.path.join(repo_path, ".git", "refs", "remotes", "origin", b)):
-            branches.append(b)
-
-    print(f"[+] Found remote branches: {branches}")
-
-    created_branches = []
-    skipped_branches = []
-
-    # Step 4: For each branch, checkout to commit at or before date
-    for branch in branches:
-        commit = get_commit_before_date(repo_path, branch, target_date)
-        if not commit:
-            skipped_branches.append(branch)
-            continue
-        try:
-            run(f"git checkout -b {branch} {commit}", cwd=repo_path)
-            created_branches.append(branch)
-        except subprocess.CalledProcessError:
-            print(f"!! Failed to checkout {branch} at {commit}")
-            skipped_branches.append(branch)
-
-    # Step 5: Remove old remote and add new one
-    run("git remote remove origin", cwd=repo_path)
-    new_url = create_github_repo(org, new_repo, token)
-    run(f"git remote add origin {new_url}", cwd=repo_path)
-
-    # Step 6: Push all successfully created branches
-    for branch in created_branches:
-        try:
-            run(f"git push -u origin {branch}", cwd=repo_path)
-        except subprocess.CalledProcessError:
-            print(f"!! Failed to push branch {branch}")
-
-    print("\n=== FINAL REPORT ===")
-    print(f"[✓] Pushed branches: {created_branches}")
-    print(f"[!] Skipped branches: {skipped_branches}")
-    print(f"[+] Repo created: https://github.com/{org}/{new_repo}")
-
-    # Step 7: Clean up safely
-    windows_safe_delete(temp_dir)
+from datetime import datetime
 
 # === CONFIGURATION ===
-if __name__ == "__main__":
-    OLD_REPO = "JH_REM_DEVOPS_AUTOMATION"  # Your source repo name
-    NEW_REPO = "JH_REM_AUTO_TEST_REVERT"   # New repo to create
-    DATE = "2025-04-10"                    # Date to revert branches to
-    ORG = "JHDevOps"                       # Your GitHub org
-    PAT = "your_personal_access_token_here"  # Replace with your PAT
+GITHUB_PAT = ""
+ORG_NAME = "JHDevOps"
+OLD_REPO = "JH_REM_DEVOPS_AUTOMATION"
+NEW_REPO = "rem_Devops_auto_version_1"
+CUTOFF_DATE = "2024-12-12"  # Format: YYYY-MM-DD
 
-    main(OLD_REPO, NEW_REPO, DATE, ORG, PAT)
+
+# === CLONE OLD REPO ===
+CLONE_URL = f"https://{GITHUB_PAT}@github.com/{ORG_NAME}/{OLD_REPO}.git"
+WORKDIR = "temp_repo_snapshot"
+
+if os.path.exists(WORKDIR):
+    shutil.rmtree(WORKDIR)
+
+# Clone repo
+subprocess.run(["git", "clone", CLONE_URL, WORKDIR], check=True)
+os.chdir(WORKDIR)
+
+# === GET ALL REMOTE BRANCHES ===
+branches_output = subprocess.check_output(["git", "ls-remote", "--heads", CLONE_URL]).decode().splitlines()
+branches = [
+    line.split("refs/heads/")[1]
+    for line in branches_output
+    if "refs/heads/" in line
+]
+
+# === RESET BRANCHES TO COMMITS BEFORE OR ON CUTOFF ===
+valid_branches = []
+for branch in branches:
+    print(f"Processing branch: {branch}")
+    subprocess.run(["git", "fetch", "origin", branch], check=True)
+    subprocess.run(["git", "checkout", "-B", branch, f"origin/{branch}"], check=True)
+
+    try:
+        # Get latest commit before or on the cutoff date
+        commit_hash = subprocess.check_output([
+            "git", "rev-list", "-1", f'--before={CUTOFF_DATE}T23:59:59', branch
+        ]).decode().strip()
+
+        if commit_hash:
+            subprocess.run(["git", "reset", "--hard", commit_hash], check=True)
+            valid_branches.append(branch)
+        else:
+            print(f"Skipping branch '{branch}' — no commits before {CUTOFF_DATE}")
+
+    except subprocess.CalledProcessError:
+        print(f"Error processing branch {branch}, skipping...")
+
+# === CREATE NEW REPO ON GITHUB ===
+print(f"Creating new repo: {NEW_REPO}")
+headers = {
+    "Authorization": f"token {GITHUB_PAT}",
+    "Accept": "application/vnd.github+json"
+}
+payload = {
+    "name": NEW_REPO,
+    "private": True
+}
+create_url = f"https://api.github.com/orgs/{ORG_NAME}/repos"
+response = requests.post(create_url, headers=headers, json=payload)
+
+if response.status_code not in [200, 201]:
+    print(f"Failed to create repo: {response.status_code} — {response.text}")
+    exit(1)
+
+# === PUSH TO NEW REPO ===
+NEW_URL = f"https://{GITHUB_PAT}@github.com/{ORG_NAME}/{NEW_REPO}.git"
+subprocess.run(["git", "remote", "remove", "origin"], check=True)
+subprocess.run(["git", "remote", "add", "origin", NEW_URL], check=True)
+
+for branch in valid_branches:
+    subprocess.run(["git", "checkout", branch], check=True)
+    subprocess.run(["git", "push", "-u", "origin", branch], check=True)
+
+print(f"\n✅ Done! Snapshot pushed to: https://github.com/{ORG_NAME}/{NEW_REPO}")
+
+
+
+import os
+import shutil
+import subprocess
+import requests
+from datetime import datetime
+
+# === CONFIGURATION ===
+GITHUB_PAT = ""
+ORG_NAME = "JHDevOps"
+OLD_REPO = "JH_REM_DEVOPS_AUTOMATION"
+NEW_REPO = "rem_Devops_auto_version_1"
+
+# === SETUP ===
+headers = {
+    "Authorization": f"token {GITHUB_PAT}",
+    "Accept": "application/vnd.github+json"
+}
+
+# === STEP 1: GET DEFAULT BRANCH FROM OLD REPO ===
+old_repo_url = f"https://api.github.com/repos/{ORG_NAME}/{OLD_REPO}"
+response = requests.get(old_repo_url, headers=headers)
+
+if response.status_code != 200:
+    print(f"Failed to fetch old repo: {response.status_code} — {response.text}")
+    exit(1)
+
+default_branch = response.json().get("default_branch")
+print(f"Default branch in old repo: {default_branch}")
+
+# === STEP 2: SET DEFAULT BRANCH IN NEW REPO ===
+new_repo_url = f"https://api.github.com/repos/{ORG_NAME}/{NEW_REPO}"
+payload = {
+    "default_branch": default_branch
+}
+response = requests.patch(new_repo_url, headers=headers, json=payload)
+
+if response.status_code not in [200, 201]:
+    print(f"Failed to update new repo: {response.status_code} — {response.text}")
+    exit(1)
+
+print(f"✅ Default branch of '{NEW_REPO}' set to '{default_branch}'")
