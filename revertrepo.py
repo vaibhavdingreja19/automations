@@ -124,3 +124,72 @@ if response.status_code not in [200, 201]:
     exit(1)
 
 print(f"✅ Default branch of '{NEW_REPO}' set to '{default_branch}'")
+
+
+
+import requests
+
+# === CONFIGURATION ===
+GITHUB_PAT = ""
+ORG_NAME = "JHDevOps"
+OLD_REPO = "JH_REM_DEVOPS_AUTOMATION"
+NEW_REPO = "rem_automation_snap_ver_1"
+
+headers = {
+    "Authorization": f"token {GITHUB_PAT}",
+    "Accept": "application/vnd.github+json"
+}
+
+# === STEP 1: Get collaborators from old repo ===
+collab_url = f"https://api.github.com/repos/{ORG_NAME}/{OLD_REPO}/collaborators"
+collab_resp = requests.get(collab_url, headers=headers)
+
+if collab_resp.status_code != 200:
+    print(f"Failed to get collaborators: {collab_resp.text}")
+    exit(1)
+
+collaborators = collab_resp.json()
+
+# === STEP 2: Re-add collaborators to new repo ===
+for user in collaborators:
+    username = user['login']
+    perm_url = f"https://api.github.com/repos/{ORG_NAME}/{OLD_REPO}/collaborators/{username}/permission"
+    perm_resp = requests.get(perm_url, headers=headers)
+    permission = perm_resp.json().get('permission', 'push')  # fallback to 'push'
+
+    print(f"Adding collaborator '{username}' with permission '{permission}'")
+
+    add_url = f"https://api.github.com/repos/{ORG_NAME}/{NEW_REPO}/collaborators/{username}"
+    payload = {
+        "permission": permission
+    }
+    add_resp = requests.put(add_url, headers=headers, json=payload)
+    if add_resp.status_code not in [201, 204]:
+        print(f"  ⚠️ Failed to add {username}: {add_resp.text}")
+
+# === STEP 3: Get teams with access to old repo ===
+teams_url = f"https://api.github.com/repos/{ORG_NAME}/{OLD_REPO}/teams"
+teams_resp = requests.get(teams_url, headers=headers)
+
+if teams_resp.status_code != 200:
+    print(f"Failed to get teams: {teams_resp.text}")
+    exit(1)
+
+teams = teams_resp.json()
+
+# === STEP 4: Grant same teams access to new repo ===
+for team in teams:
+    team_slug = team['slug']
+    permission = team['permission']
+
+    print(f"Granting team '{team_slug}' {permission} access")
+
+    add_team_url = f"https://api.github.com/orgs/{ORG_NAME}/teams/{team_slug}/repos/{ORG_NAME}/{NEW_REPO}"
+    payload = {
+        "permission": permission
+    }
+    add_team_resp = requests.put(add_team_url, headers=headers, json=payload)
+    if add_team_resp.status_code not in [204, 201]:
+        print(f"  ⚠️ Failed to add team '{team_slug}': {add_team_resp.text}")
+
+print("\n Done! Collaborators and teams copied to the new repo.")
