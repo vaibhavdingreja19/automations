@@ -4,10 +4,11 @@ import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.adapters import HTTPAdapter, Retry
 import threading
+import os
 
 
 ORG_NAME = "JHDevOps"
-PAT = ""  
+PAT = os.getenv('GITHUB_PAT') 
 
 
 API_BASE = "https://api.github.com"
@@ -80,19 +81,19 @@ def process_repo(repo, org_admins):
 
 
 def main():
-    print("Getting org admins...")
+    print(" Getting org admin")
     org_admins = get_org_admins(ORG_NAME)
 
-    print("Getting repository list...")
+    print("Getting repository list")
     repos = get_repos(ORG_NAME)
 
-    print(f"Starting concurrent processing with {MAX_WORKERS} workers...")
+    #print(f"Starting concurrent processing with {MAX_WORKERS} workers")
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = [executor.submit(process_repo, repo, org_admins) for repo in repos]
         for future in as_completed(futures):
             future.result()
 
-    print("Writing to Excel file...")
+    
     df = pd.DataFrame(data_rows)
     df.to_excel("repo_access_report.xlsx", index=False)
     print("Report saved as 'repo_access_report.xlsx'")
