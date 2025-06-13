@@ -4,10 +4,10 @@ from requests.auth import HTTPBasicAuth
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.adapters import HTTPAdapter, Retry
 import threading
-
+import os 
 
 ORG_NAME = "JHDevOps"
-PAT = ""  
+PAT = os.getenv('GITHUB_PAT')
 INPUT_FILE = "repo_access_report.xlsx"  
 OUTPUT_FILE = "user_team_membership.xlsx"
 MAX_WORKERS = 20
@@ -39,7 +39,7 @@ def get_org_teams():
     while url:
         response = session.get(url)
         if response.status_code != 200:
-            print(f"⚠️ Failed to fetch teams: {response.status_code}")
+            print(f"Failed to fetch teams: {response.status_code}")
             break
         results.extend(response.json())
         url = response.links.get('next', {}).get('url')
@@ -65,7 +65,7 @@ def process_user(username, teams):
 
 
 def main():
-    print("🔍 Reading Excel file...")
+    print("Reading Excel file")
     df = pd.read_excel(INPUT_FILE)
     usernames = set()
 
@@ -78,13 +78,13 @@ def main():
     teams = get_org_teams()
     print(f"Org teams found: {len(teams)}")
 
-    print("Checking team memberships (parallel)...")
+    print("Checking team memberships (parallel)")
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = [executor.submit(process_user, user, teams) for user in usernames]
         for future in as_completed(futures):
             future.result()
 
-    print(" Writing output to Excel...")
+    print(" Writing output to Excel")
     result_df = pd.DataFrame(user_team_map)
     result_df.to_excel(OUTPUT_FILE, index=False)
     print(f"Done. Output saved to '{OUTPUT_FILE}'")
