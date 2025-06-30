@@ -76,12 +76,12 @@ def main():
     with print_lock:
         print(f"[START] Cloning will happen inside '{date_folder}' folder.\n")
 
-    xls = pd.ExcelFile(INPUT_FILE)
+    xls = pd.ExcelFile(INPUT_FILE, engine='openpyxl')
     for sheet_name in xls.sheet_names:
         with print_lock:
             print(f"[BATCH] Starting clones for '{sheet_name}'...")
 
-        batch_df = pd.read_excel(INPUT_FILE, sheet_name=sheet_name)
+        batch_df = pd.read_excel(INPUT_FILE, sheet_name=sheet_name, engine='openpyxl')
         process_batch(batch_df)
 
         with print_lock:
