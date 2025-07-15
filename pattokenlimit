@@ -1,0 +1,28 @@
+import requests
+from datetime import datetime
+
+def check_github_rate_limit(token):
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+
+    response = requests.get("https://api.github.com/rate_limit", headers=headers)
+
+    if response.status_code == 200:
+        data = response.json()
+        core = data['rate']
+        limit = core['limit']
+        remaining = core['remaining']
+        reset_time = datetime.fromtimestamp(core['reset']).strftime('%Y-%m-%d %H:%M:%S')
+
+        print(f"🔒 API Limit: {limit}")
+        print(f"✅ Remaining: {remaining}")
+        print(f"🕒 Resets at: {reset_time}")
+    else:
+        print(f"❌ Failed to fetch rate limit. Status code: {response.status_code}")
+        print(f"Message: {response.text}")
+
+# Example usage:
+# Replace 'your_token_here' with your actual token
+# check_github_rate_limit("your_token_here")
