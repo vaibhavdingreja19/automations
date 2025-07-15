@@ -1,28 +1,52 @@
 import requests
 from datetime import datetime
 
-def check_github_rate_limit(token):
+def check_github_limits(token):
     headers = {
         "Authorization": f"token {token}",
         "Accept": "application/vnd.github.v3+json"
     }
 
-    response = requests.get("https://api.github.com/rate_limit", headers=headers)
-
-    if response.status_code == 200:
-        data = response.json()
-        core = data['rate']
-        limit = core['limit']
-        remaining = core['remaining']
-        reset_time = datetime.fromtimestamp(core['reset']).strftime('%Y-%m-%d %H:%M:%S')
-
-        print(f"🔒 API Limit: {limit}")
-        print(f"✅ Remaining: {remaining}")
-        print(f"🕒 Resets at: {reset_time}")
+    # 1. REST API Rate Limit
+    rest_response = requests.get("https://api.github.com/rate_limit", headers=headers)
+    if rest_response.status_code == 200:
+        rest_data = rest_response.json()["rate"]
+        reset_time = datetime.fromtimestamp(rest_data["reset"]).strftime('%Y-%m-%d %H:%M:%S')
+        print("📦 REST API Limit:")
+        print(f"  🔢 Limit     : {rest_data['limit']}")
+        print(f"  ✅ Remaining : {rest_data['remaining']}")
+        print(f"  🕒 Resets At : {reset_time}")
     else:
-        print(f"❌ Failed to fetch rate limit. Status code: {response.status_code}")
-        print(f"Message: {response.text}")
+        print("❌ Failed to fetch REST API limit")
+        print(rest_response.text)
 
-# Example usage:
-# Replace 'your_token_here' with your actual token
-# check_github_rate_limit("your_token_here")
+    # 2. GraphQL API Rate Limit
+    graphql_url = "https://api.github.com/graphql"
+    graphql_headers = {
+        "Authorization": f"bearer {token}",
+        "Content-Type": "application/json"
+    }
+    query = """
+    {
+      rateLimit {
+        limit
+        cost
+        remaining
+        resetAt
+      }
+    }
+    """
+    graphql_response = requests.post(graphql_url, json={"query": query}, headers=graphql_headers)
+    if graphql_response.status_code == 200:
+        gql = graphql_response.json()["data"]["rateLimit"]
+        print("\n🔮 GraphQL API Limit:")
+        print(f"  🔢 Limit     : {gql['limit']}")
+        print(f"  💰 Last Cost : {gql['cost']}")
+        print(f"  ✅ Remaining : {gql['remaining']}")
+        print(f"  🕒 Resets At : {gql['resetAt']}")
+    else:
+        print("❌ Failed to fetch GraphQL API limit")
+        print(graphql_response.text)
+
+# 👉 Replace with your token or use input()
+# check_github_limits("your_pat_token_here")
