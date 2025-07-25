@@ -1,0 +1,22 @@
+# === Step 1 (inline) : copy & unblock ALL scripts ===
+$srcRoot  = "\\teamcity.jhancock.com\scm\release\sasrem_automation\MFR_Deployment"
+$destRoot = Join-Path "%teamcity.build.checkoutDir%" "scripts"
+New-Item -ItemType Directory -Force -Path $destRoot | Out-Null
+
+# Map: TeamCity parameter name  -> file name
+$map = @{
+  'env.ItemisedFileCreate.Script' = 'MFR_Create_Itemised_File_V1.ps1'
+  'env.CheckModule.Script'        = 'Check_Module_V1.ps1'   # <- make sure name matches your step!
+}
+
+foreach ($kv in $map.GetEnumerator()) {
+    $src  = Join-Path $srcRoot  $kv.Value
+    $dest = Join-Path $destRoot $kv.Value
+    Copy-Item $src $dest -Force
+    Unblock-File $dest
+    Write-Host "Copied & unblocked $($kv.Value) -> $dest"
+    Write-Host "##teamcity[setParameter name='$($kv.Key)' value='$dest']"
+}
+
+# (optional) also expose the folder so you can build paths yourself
+Write-Host "##teamcity[setParameter name='env.ScriptsDir' value='$destRoot']"
