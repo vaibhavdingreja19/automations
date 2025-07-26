@@ -9,17 +9,10 @@ from typing import Dict, List, Tuple, Optional
 
 BASE_URL = "https://api.github.com"
 
-APP_IDS = [
-    os.getenv('appid1'), os.getenv('appid2'), os.getenv('appid3'), os.getenv('appid4'),
-    os.getenv('appid5'), os.getenv('appid6'), os.getenv('appid7'), os.getenv('appid8')
-]
-RSA_KEYS = [
-    os.getenv('rsakey1'), os.getenv('rsakey2'), os.getenv('rsakey3'), os.getenv('rsakey4'),
-    os.getenv('rsakey5'), os.getenv('rsakey6'), os.getenv('rsakey7'), os.getenv('rsakey8')
-]
+APP_IDS = ['1032222', '10322222']  
+RSA_KEYS = ['rsakey1', 'rsakey2']  
 
-
-REPO_LOOKUP_TOKEN = os.getenv("GH_REPO_LOOKUP_TOKEN")
+REPO_LOOKUP_TOKEN = 'ghp_TboB'
 
 
 
@@ -49,16 +42,13 @@ def gh_request(method: str, url: str, headers: Dict[str, str], **kwargs):
         raise GitHubError(f"{method} {url} -> {resp.status_code}: {body}")
     raise GitHubError("Exceeded retry attempts due to rate limiting.")
 
-def generate_jwt(app_id: str, private_key: str) -> str:
+def generate_jwt(app_id, private_key):
     payload = {
-        "iat": int(time.time()) - 60,  # clock skew
+        "iat": int(time.time()),
         "exp": int(time.time()) + (10 * 60),
         "iss": app_id,
     }
     token = jwt.encode(payload, private_key, algorithm="RS256")
-    # PyJWT >= 2 returns str, <2 returns bytes
-    if isinstance(token, bytes):
-        token = token.decode("utf-8")
     return token
 
 def get_app(jwt_token: str) -> Dict:
@@ -67,27 +57,19 @@ def get_app(jwt_token: str) -> Dict:
                "Accept": "application/vnd.github+json"}
     return gh_request("GET", url, headers).json()
 
-def get_installations(jwt_token: str) -> List[Dict]:
+def get_installations(jwt_token):
     url = f"{BASE_URL}/app/installations"
-    headers = {"Authorization": f"Bearer {jwt_token}",
-               "Accept": "application/vnd.github+json"}
-    installations = []
-    page = 1
-    while True:
-        resp = gh_request("GET", url, headers, params={"per_page": 100, "page": page})
-        chunk = resp.json()
-        if not chunk:
-            break
-        installations.extend(chunk)
-        page += 1
-    return installations
+    headers = {"Authorization": f"Bearer {jwt_token}", "Accept": "application/vnd.github+json"}
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    return response.json()
 
-def get_installation_token(jwt_token: str, installation_id: int) -> str:
+def get_installation_token(installation_id, jwt_token):
     url = f"{BASE_URL}/app/installations/{installation_id}/access_tokens"
-    headers = {"Authorization": f"Bearer {jwt_token}",
-               "Accept": "application/vnd.github+json"}
-    resp = gh_request("POST", url, headers)
-    return resp.json()["token"]
+    headers = {"Authorization": f"Bearer {jwt_token}", "Accept": "application/vnd.github+json"}
+    response = requests.post(url, headers=headers)
+    response.raise_for_status()
+    return response.json()["token"]
 
 def resolve_repo_id(owner: str, repo: str) -> int:
     """
@@ -113,7 +95,7 @@ def add_repo_to_installation(installation_token: str, installation_id: int, repo
     Uses the installation access token to add a repository to the installation.
     Endpoint: PUT /user/installations/{installation_id}/repositories/{repository_id}
     """
-    url = f"{BASE_URL}/user/installations/{installation_id}/repositories/{repo_id}"
+    url = f"{BASE_URL}/app/installations/{installation_id}/repositories/{repo_id}"
     headers = {"Authorization": f"Bearer {installation_token}",
                "Accept": "application/vnd.github+json"}
     # GitHub returns 204 No Content on success
@@ -212,7 +194,7 @@ def main():
     print(f"Repository id for {owner}/{repo} is {repo_id}")
 
     
-    installation_token = get_installation_token(installation_id, chosen["jwt"])
+    installation_token = get_installation_token(installation_id, jwt_token)
 
     
     current_repo_ids = set(list_installation_repos(installation_token))
