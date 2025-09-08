@@ -6,7 +6,7 @@
 #   CHUNK_DAYS: size of each time window per request
 #   N_WORKERS : number of concurrent threads
 
-import os, math, time, json, pathlib, logging, requests
+import os, time, pathlib, logging, requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from dateutil import parser as dtparser
@@ -20,8 +20,8 @@ TEAMCITY_PAT  = os.getenv("TEAMCITY_PAT")  or os.getenv("teamcity_pat")
 DAYS_BACK     = int(os.getenv("TEAMCITY_DAYS_BACK") or 30)
 
 # ---- concurrency tunables ----
-CHUNK_DAYS = 3          # split the window into 3-day chunks (adjust to 1 if you want more parallelism)
-N_WORKERS  = 8          # concurrent threads (increase if your TC can handle it)
+CHUNK_DAYS = 3          # split the window into 3-day chunks
+N_WORKERS  = 8          # concurrent threads
 TIMEOUT_S  = 60
 RETRIES    = 3
 SLEEP_BETWEEN_RETRIES_S = 2
@@ -41,9 +41,10 @@ def _tc_get(path, params=None):
     last_exc = None
     for attempt in range(1, RETRIES+1):
         try:
-            r = requests.get(url, headers=headers, params=params, timeout=TIMEOUT_S)
+            r = requests.get(
+                url, headers=headers, params=params, timeout=TIMEOUT_S, verify=False
+            )
             if r.status_code >= 400:
-                # surfacing the first ~300 chars to help debug
                 raise RuntimeError(f"TeamCity GET {path} -> {r.status_code} {r.text[:300]}")
             return r.json()
         except Exception as e:
@@ -61,18 +62,15 @@ def _parse_tc_time(s):
 def _extract_repo(build) -> str | None:
     try:
         revs = build.get("revisions", {}).get("revision", [])
-        if not revs:
-            return None
+        if not revs: return None
         vroot = revs[0].get("vcsRootInstance", {}).get("vcs-root", {})
         props = vroot.get("properties", {}).get("property", [])
         kv = {p.get("name"): p.get("value") for p in props if "name" in p and "value" in p}
-
         repo_url = (
             kv.get("url") or kv.get("repository_url") or kv.get("repositoryUrl")
             or kv.get("repo_url") or kv.get("gitUrl") or ""
         ).strip()
-        if repo_url.endswith(".git"):
-            repo_url = repo_url[:-4]
+        if repo_url.endswith(".git"): repo_url = repo_url[:-4]
         if "github.com/" in repo_url:
             tail = repo_url.split("github.com/")[1].strip("/")
             parts = tail.split("/")
@@ -83,11 +81,9 @@ def _extract_repo(build) -> str | None:
     return None
 
 def _iso_tc(dt: datetime) -> str:
-    # TeamCity expects yyyymmddThhmmss+0000 (or with timezone)
     return dt.strftime("%Y%m%dT%H%M%S+0000")
 
 def _fetch_chunk(since_dt: datetime, until_dt: datetime) -> list[dict]:
-    """Fetch all builds in [since_dt, until_dt] with pagination, for a single chunk."""
     builds = []
     locator = f"sinceDate:{_iso_tc(since_dt)},untilDate:{_iso_tc(until_dt)},count:1000"
     path = f"/app/rest/builds?locator={locator}&fields={FIELDS}"
@@ -110,9 +106,7 @@ def _fetch_chunk(since_dt: datetime, until_dt: datetime) -> list[dict]:
                 "repo": _extract_repo(b),
             })
         next_href = data.get("nextHref")
-        if not next_href:
-            break
-        # nextHref can already include the fields; but we ensure fields are present
+        if not next_href: break
         if "fields=" not in next_href:
             join = "&" if "?" in next_href else "?"
             next_href = f"{next_href}{join}fields={FIELDS}"
@@ -125,7 +119,6 @@ def main():
     end_utc = datetime.now(timezone.utc)
     start_utc = end_utc - timedelta(days=DAYS_BACK)
 
-    # Build chunk windows
     chunks = []
     cur = start_utc
     while cur < end_utc:
@@ -133,7 +126,8 @@ def main():
         chunks.append((cur, nxt))
         cur = nxt
 
-    logging.info(f"Fetching builds in {len(chunks)} chunks ({CHUNK_DAYS} days each), upto last {DAYS_BACK} days…")
+    logging.info(f"Fetching builds in {len(chunks)} chunks ({CHUNK_DAYS} days each)…")
+
     all_rows = []
     with ThreadPoolExecutor(max_workers=N_WORKERS) as ex:
         futs = {ex.submit(_fetch_chunk, s, e): (s, e) for (s, e) in chunks}
@@ -146,32 +140,21 @@ def main():
             except Exception as e:
                 logging.error(f"  chunk {_iso_tc(s)} → {_iso_tc(e)} failed: {e}")
 
-    # Deduplicate across chunks by build_id
-    if all_rows:
-        df = pd.DataFrame(all_rows)
-        df = df.drop_duplicates(subset=["build_id"])
-    else:
-        df = pd.DataFrame(columns=["build_id","status","state","queued_at","started_at","finished_at","duration_s","repo"])
-
+    df = pd.DataFrame(all_rows).drop_duplicates(subset=["build_id"]) if all_rows else pd.DataFrame()
     raw_path = DATA_DIR / "teamcity_builds_raw.csv"
     df.to_csv(raw_path, index=False)
     logging.info(f"Saved: {raw_path} ({len(df)} unique builds)")
 
-    # Map builds → app via Step 1 mapping
     map_path = DATA_DIR / "repo_app_map.csv"
     if not map_path.exists():
-        raise SystemExit("Missing data/repo_app_map.csv from Step 1. Run Step 1 first.")
+        raise SystemExit("Missing data/repo_app_map.csv from Step 1.")
 
     repo_map = pd.read_csv(map_path)
     m = repo_map[["repo_full_name", "app_slug", "installation_id"]].drop_duplicates()
-
     use = df.dropna(subset=["repo"]).merge(m, how="left", left_on="repo", right_on="repo_full_name")
 
     def _succ(s): return (s == "SUCCESS").sum()
     def _fail(s): return (s == "FAILURE").sum()
-
-    if use.empty:
-        logging.warning("No builds matched to repos in repo_app_map.csv. Check VCS URLs in TeamCity and Step 1 output.")
 
     agg = use.groupby(["app_slug", "installation_id"], dropna=False).agg(
         builds=("build_id", "count"),
