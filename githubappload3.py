@@ -1,16 +1,15 @@
 # 03_teamcity_builds_env_parallel.py
 # Parallel TeamCity build fetch -> map to GitHub Apps -> aggregate per app/installation.
-# Env vars:
-#   TEAMCITY_BASE, TEAMCITY_PAT, TEAMCITY_DAYS_BACK (optional)
-# Tuning:
-#   CHUNK_DAYS: size of each time window per request
-#   N_WORKERS : number of concurrent threads
 
 import os, time, pathlib, logging, requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from dateutil import parser as dtparser
 import pandas as pd
+import urllib3
+
+# silence InsecureRequestWarning for verify=False
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 DATA_DIR = pathlib.Path("./data"); DATA_DIR.mkdir(exist_ok=True)
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -20,8 +19,8 @@ TEAMCITY_PAT  = os.getenv("TEAMCITY_PAT")  or os.getenv("teamcity_pat")
 DAYS_BACK     = int(os.getenv("TEAMCITY_DAYS_BACK") or 30)
 
 # ---- concurrency tunables ----
-CHUNK_DAYS = 3          # split the window into 3-day chunks
-N_WORKERS  = 8          # concurrent threads
+CHUNK_DAYS = 3          # set to 1 for more parallelism
+N_WORKERS  = 8          # raise if your TC can handle it
 TIMEOUT_S  = 60
 RETRIES    = 3
 SLEEP_BETWEEN_RETRIES_S = 2
@@ -41,14 +40,12 @@ def _tc_get(path, params=None):
     last_exc = None
     for attempt in range(1, RETRIES+1):
         try:
-            r = requests.get(
-                url, headers=headers, params=params, timeout=TIMEOUT_S, verify=False
-            )
+            r = requests.get(url, headers=headers, params=params, timeout=TIMEOUT_S, verify=False)
             if r.status_code >= 400:
                 raise RuntimeError(f"TeamCity GET {path} -> {r.status_code} {r.text[:300]}")
             return r.json()
-        except Exception as e:
-            last_exc = e
+        except Exception as exc:
+            last_exc = exc
             if attempt < RETRIES:
                 time.sleep(SLEEP_BETWEEN_RETRIES_S * attempt)
             else:
@@ -119,6 +116,7 @@ def main():
     end_utc = datetime.now(timezone.utc)
     start_utc = end_utc - timedelta(days=DAYS_BACK)
 
+    # Build chunk windows
     chunks = []
     cur = start_utc
     while cur < end_utc:
@@ -130,21 +128,24 @@ def main():
 
     all_rows = []
     with ThreadPoolExecutor(max_workers=N_WORKERS) as ex:
-        futs = {ex.submit(_fetch_chunk, s, e): (s, e) for (s, e) in chunks}
+        futs = {ex.submit(_fetch_chunk, start_dt, end_dt): (start_dt, end_dt) for (start_dt, end_dt) in chunks}
         for fut in as_completed(futs):
-            s, e = futs[fut]
+            start_dt, end_dt = futs[fut]
             try:
                 rows = fut.result()
                 all_rows.extend(rows)
-                logging.info(f"  chunk {_iso_tc(s)} → {_iso_tc(e)}: {len(rows)} builds")
-            except Exception as e:
-                logging.error(f"  chunk {_iso_tc(s)} → {_iso_tc(e)} failed: {e}")
+                logging.info(f"  chunk {_iso_tc(start_dt)} → {_iso_tc(end_dt)}: {len(rows)} builds")
+            except Exception as err:
+                logging.error(f"  chunk {_iso_tc(start_dt)} → {_iso_tc(end_dt)} failed: {err}")
 
-    df = pd.DataFrame(all_rows).drop_duplicates(subset=["build_id"]) if all_rows else pd.DataFrame()
+    df = pd.DataFrame(all_rows).drop_duplicates(subset=["build_id"]) if all_rows else pd.DataFrame(
+        columns=["build_id","status","state","queued_at","started_at","finished_at","duration_s","repo"]
+    )
     raw_path = DATA_DIR / "teamcity_builds_raw.csv"
     df.to_csv(raw_path, index=False)
     logging.info(f"Saved: {raw_path} ({len(df)} unique builds)")
 
+    # Map builds → app via Step 1 mapping
     map_path = DATA_DIR / "repo_app_map.csv"
     if not map_path.exists():
         raise SystemExit("Missing data/repo_app_map.csv from Step 1.")
