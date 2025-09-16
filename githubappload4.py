@@ -2,11 +2,16 @@ import os, time, pathlib, logging, requests, jwt, json
 from datetime import datetime, timezone, timedelta
 import pandas as pd
 
-ORG = "JHDevOps"
-NUM_APPS = 7
-DATA_DIR = pathlib.Path("./data"); DATA_DIR.mkdir(exist_ok=True)
-AGG_FILE = DATA_DIR / "api_usage_aggregates.json"
-SUMMARY_CSV = DATA_DIR / "api_usage_30d_summary.csv"
+ORG = os.getenv("ORG", "JHDevOps")
+NUM_APPS = int(os.getenv("NUM_APPS", "8"))
+DATA_DIR = pathlib.Path(os.getenv("DATA_DIR", "./data"))
+DATA_DIR.mkdir(exist_ok=True)
+# output files (can be overridden with env vars)
+AGG_FILE = pathlib.Path(os.getenv("AGG_FILE", str(DATA_DIR / "api_usage_aggregates.json")))
+SUMMARY_CSV = pathlib.Path(os.getenv("SUMMARY_CSV", str(DATA_DIR / "api_usage_30d_summary.csv")))
+# optional: TeamCity artifact dependency can place a previous aggregates file and set its path here
+PREV_AGG_FILE = os.getenv("PREV_AGG_FILE")
+
 GITHUB_API = "https://api.github.com"
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -58,21 +63,31 @@ def _as_int(v):
         return 0
 
 def load_aggs():
-    if AGG_FILE.exists():
-        try:
-            with open(AGG_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {}
-    return {}
+    # priority: PREV_AGG_FILE (artifact dependency) then AGG_FILE in workspace
+    candidate = None
+    if PREV_AGG_FILE:
+        p = pathlib.Path(PREV_AGG_FILE)
+        if p.exists():
+            candidate = p
+    if candidate is None and AGG_FILE.exists():
+        candidate = AGG_FILE
+    if not candidate:
+        logging.info("No previous aggregates file found; starting fresh.")
+        return {}
+    try:
+        logging.info(f"Loading previous aggregates from: {candidate}")
+        return json.loads(candidate.read_text(encoding="utf-8"))
+    except Exception as e:
+        logging.warning(f"Failed to load previous aggregates ({candidate}): {e}. Starting fresh.")
+        return {}
 
 def save_aggs(obj):
-    with open(AGG_FILE, "w", encoding="utf-8") as f:
-        json.dump(obj, f, indent=2, ensure_ascii=False)
+    AGG_FILE.write_text(json.dumps(obj, indent=2, ensure_ascii=False), encoding="utf-8")
+    logging.info(f"Saved aggregates to: {AGG_FILE}")
 
 def prune_daily_counts(daily_counts):
     today = datetime.now(timezone.utc).date()
-    cutoff = today - timedelta(days=29)  # keep 30 days including today
+    cutoff = today - timedelta(days=29)
     keys = list(daily_counts.keys())
     for k in keys:
         try:
@@ -157,10 +172,10 @@ def main():
             prune_daily_counts(dc)
             record["daily_counts"] = dc
             record["total_calls_alltime"] = int(record.get("total_calls_alltime", 0)) + int(delta)
-            last_30d_total = sum(int(v) for v in dc.values())
 
             aggs[key] = record
 
+            last_30d_total = sum(int(v) for v in dc.values())
             summary_rows.append({
                 "app_slug": slug,
                 "installation_id": inst_id,
