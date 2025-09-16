@@ -1,26 +1,20 @@
-
-
 import os, time, pathlib, logging, requests, jwt
 from datetime import datetime, timezone
 import pandas as pd
 
-
 ORG = "JHDevOps"
-NUM_APPS = 7  # how many appid/rsakey pairs to read
+NUM_APPS = 7
 DATA_DIR = pathlib.Path("./data"); DATA_DIR.mkdir(exist_ok=True)
 SAMPLES_FILE = DATA_DIR / "api_usage_samples.csv"
 
-
 GITHUB_API = "https://api.github.com"
 logging.basicConfig(level=logging.INFO, format="%(message)s")
-
 
 APPS = []
 for i in range(1, NUM_APPS+1):
     app_id = os.getenv(f"appid{i}")
     rsakey = os.getenv(f"rsakey{i}")
     if not app_id or not rsakey:
-        logging.warning(f"appid{i}/rsakey{i} not found in env; skipping.")
         continue
     APPS.append({
         "slug": f"app-{i}",
@@ -83,7 +77,7 @@ def main():
         for ins in installs:
             inst_id = ins.get("id")
             acct = (ins.get("account") or {}).get("login")
-            if acct != ORG:  # only our org
+            if acct != ORG:
                 continue
             try:
                 inst_token = create_installation_token(app_jwt, inst_id)
@@ -94,7 +88,7 @@ def main():
 
             core, gql = resources.get("core", {}), resources.get("graphql", {})
             rows.append({
-                "last_timestamp": ts,                # last seen timestamp
+                "last_timestamp": ts,
                 "app_slug": slug,
                 "installation_id": safe_int(inst_id, None),
                 "core_limit": core.get("limit"),
@@ -110,20 +104,15 @@ def main():
         return
 
     new_df = pd.DataFrame(rows)
-
-    
     new_df["installation_id"] = pd.to_numeric(new_df["installation_id"], errors="coerce").astype("Int64")
     new_df["app_slug"] = new_df["app_slug"].astype("string")
 
-    
     if SAMPLES_FILE.exists():
         try:
             old_df = pd.read_csv(SAMPLES_FILE, dtype={"app_slug": "string"})
-        except Exception as e:
-            logging.error(f"Failed to read existing samples file: {e}. Will recreate file.")
+        except Exception:
             old_df = pd.DataFrame()
 
-        
         if old_df.empty:
             old_df = pd.DataFrame(columns=[
                 "app_slug", "installation_id", "last_timestamp",
@@ -132,7 +121,6 @@ def main():
                 "count"
             ])
 
-        
         if "installation_id" in old_df.columns:
             old_df["installation_id"] = pd.to_numeric(old_df["installation_id"], errors="coerce").astype("Int64")
         else:
@@ -144,24 +132,20 @@ def main():
         if "count" not in old_df.columns:
             old_df["count"] = 0
 
-        
         old_df.set_index(["app_slug", "installation_id"], inplace=True, drop=False)
         new_df.set_index(["app_slug", "installation_id"], inplace=True)
 
-        
         for idx, new_row in new_df.iterrows():
             if idx in old_df.index:
-                # replace the rate-limit fields and timestamp, increment count
                 for fld in ["core_limit", "core_used", "core_remaining",
                             "graphql_limit", "graphql_used", "graphql_remaining",
                             "last_timestamp"]:
-                    old_df.at[idx, fld] = new_row.get(fld)
-                
+                    old_df.loc[idx, fld] = new_row.get(fld)
                 try:
-                    old_count = int(old_df.at[idx, "count"])
-                    old_df.at[idx, "count"] = old_count + 1
+                    old_count = int(old_df.loc[idx, "count"])
+                    old_df.loc[idx, "count"] = old_count + 1
                 except Exception:
-                    old_df.at[idx, "count"] = 1
+                    old_df.loc[idx, "count"] = 1
             else:
                 insert = {
                     "app_slug": new_row.get("app_slug"),
@@ -175,17 +159,14 @@ def main():
                     "graphql_remaining": new_row.get("graphql_remaining"),
                     "count": 1
                 }
-                
                 old_df.loc[idx] = insert
 
         out_df = old_df.reset_index(drop=True)
     else:
-        
         new_df = new_df.reset_index(drop=True)
         new_df["count"] = 1
         out_df = new_df
 
-   
     out_df.to_csv(SAMPLES_FILE, index=False)
     logging.info(f"Updated/created {len(rows)} rows. File now has {len(out_df)} total rows → {SAMPLES_FILE}")
 
