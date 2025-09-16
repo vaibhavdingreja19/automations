@@ -1,23 +1,20 @@
-# 02_sample_api_env_append_overwrite.py
-# Collect GitHub App API usage and update a CSV that keeps one row per app+installation.
-# Run this script every hour (cron, Task Scheduler, etc).
-# App IDs and RSA keys are read from env vars: appid1, rsakey1, appid2, rsakey2, ...
+
 
 import os, time, pathlib, logging, requests, jwt
 from datetime import datetime, timezone
 import pandas as pd
 
-# ---------- CONFIG ----------
+
 ORG = "JHDevOps"
 NUM_APPS = 7  # how many appid/rsakey pairs to read
 DATA_DIR = pathlib.Path("./data"); DATA_DIR.mkdir(exist_ok=True)
 SAMPLES_FILE = DATA_DIR / "api_usage_samples.csv"
-# ---------- END CONFIG ----------
+
 
 GITHUB_API = "https://api.github.com"
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-# Build APPS list from env vars
+
 APPS = []
 for i in range(1, NUM_APPS+1):
     app_id = os.getenv(f"appid{i}")
@@ -64,6 +61,12 @@ def get_rate_limit(inst_token: str):
     headers = {"Authorization": f"token {inst_token}", "Accept": "application/vnd.github+json"}
     return req("GET", f"{GITHUB_API}/rate_limit", headers).json().get("resources", {})
 
+def safe_int(v, default=None):
+    try:
+        return int(v)
+    except Exception:
+        return default
+
 def main():
     ts = datetime.now(timezone.utc).isoformat()
     rows = []
@@ -93,7 +96,7 @@ def main():
             rows.append({
                 "last_timestamp": ts,                # last seen timestamp
                 "app_slug": slug,
-                "installation_id": inst_id,
+                "installation_id": safe_int(inst_id, None),
                 "core_limit": core.get("limit"),
                 "core_used": core.get("used"),
                 "core_remaining": core.get("remaining"),
@@ -106,56 +109,83 @@ def main():
         logging.info("No rows collected.")
         return
 
-    new_df = pd.DataFrame(rows).astype({
-        "app_slug": "string",
-        "installation_id": "int64"
-    })
+    new_df = pd.DataFrame(rows)
 
-    # If file exists, load and update rather than append.
+    
+    new_df["installation_id"] = pd.to_numeric(new_df["installation_id"], errors="coerce").astype("Int64")
+    new_df["app_slug"] = new_df["app_slug"].astype("string")
+
+    
     if SAMPLES_FILE.exists():
-        old_df = pd.read_csv(SAMPLES_FILE, dtype={"app_slug": "string", "installation_id": "int64"})
-        # Ensure required columns exist in old_df
-        if "count" not in old_df.columns:
-            old_df["count"] = 1  # fallback: treat existing rows as seen once before
-        if "last_timestamp" not in old_df.columns:
-            old_df["last_timestamp"] = ""
+        try:
+            old_df = pd.read_csv(SAMPLES_FILE, dtype={"app_slug": "string"})
+        except Exception as e:
+            logging.error(f"Failed to read existing samples file: {e}. Will recreate file.")
+            old_df = pd.DataFrame()
 
-        # Set multi-index for quick lookups
-        old_df.set_index(["app_slug", "installation_id"], inplace=True)
+        
+        if old_df.empty:
+            old_df = pd.DataFrame(columns=[
+                "app_slug", "installation_id", "last_timestamp",
+                "core_limit", "core_used", "core_remaining",
+                "graphql_limit", "graphql_used", "graphql_remaining",
+                "count"
+            ])
+
+        
+        if "installation_id" in old_df.columns:
+            old_df["installation_id"] = pd.to_numeric(old_df["installation_id"], errors="coerce").astype("Int64")
+        else:
+            old_df["installation_id"] = pd.Series(dtype="Int64")
+
+        if "app_slug" not in old_df.columns:
+            old_df["app_slug"] = pd.Series(dtype="string")
+
+        if "count" not in old_df.columns:
+            old_df["count"] = 0
+
+        
+        old_df.set_index(["app_slug", "installation_id"], inplace=True, drop=False)
         new_df.set_index(["app_slug", "installation_id"], inplace=True)
 
-        # For each incoming row, update or create:
+        
         for idx, new_row in new_df.iterrows():
             if idx in old_df.index:
-                # increment count, replace limit/used/remaining and last_timestamp
-                old_df.at[idx, "core_limit"] = new_row["core_limit"]
-                old_df.at[idx, "core_used"] = new_row["core_used"]
-                old_df.at[idx, "core_remaining"] = new_row["core_remaining"]
-                old_df.at[idx, "graphql_limit"] = new_row["graphql_limit"]
-                old_df.at[idx, "graphql_used"] = new_row["graphql_used"]
-                old_df.at[idx, "graphql_remaining"] = new_row["graphql_remaining"]
-                old_df.at[idx, "last_timestamp"] = new_row["last_timestamp"]
-                # safe increment (handle NaN)
+                # replace the rate-limit fields and timestamp, increment count
+                for fld in ["core_limit", "core_used", "core_remaining",
+                            "graphql_limit", "graphql_used", "graphql_remaining",
+                            "last_timestamp"]:
+                    old_df.at[idx, fld] = new_row.get(fld)
+                
                 try:
-                    old_df.at[idx, "count"] = int(old_df.at[idx, "count"]) + 1
+                    old_count = int(old_df.at[idx, "count"])
+                    old_df.at[idx, "count"] = old_count + 1
                 except Exception:
                     old_df.at[idx, "count"] = 1
             else:
-                # insert new row with count = 1
-                insert = new_row.to_dict()
-                insert["count"] = 1
+                insert = {
+                    "app_slug": new_row.get("app_slug"),
+                    "installation_id": new_row.get("installation_id"),
+                    "last_timestamp": new_row.get("last_timestamp"),
+                    "core_limit": new_row.get("core_limit"),
+                    "core_used": new_row.get("core_used"),
+                    "core_remaining": new_row.get("core_remaining"),
+                    "graphql_limit": new_row.get("graphql_limit"),
+                    "graphql_used": new_row.get("graphql_used"),
+                    "graphql_remaining": new_row.get("graphql_remaining"),
+                    "count": 1
+                }
+                
                 old_df.loc[idx] = insert
 
-        # Reset index and write full table (overwrite)
-        out_df = old_df.reset_index()
+        out_df = old_df.reset_index(drop=True)
     else:
-        # New file — set count = 1 for all
-        new_df = new_df.reset_index()
+        
+        new_df = new_df.reset_index(drop=True)
         new_df["count"] = 1
-        new_df = new_df.rename(columns={"last_timestamp": "last_timestamp"})
         out_df = new_df
 
-    # Write (overwrite) the CSV
+   
     out_df.to_csv(SAMPLES_FILE, index=False)
     logging.info(f"Updated/created {len(rows)} rows. File now has {len(out_df)} total rows → {SAMPLES_FILE}")
 
