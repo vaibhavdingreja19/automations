@@ -1,56 +1,47 @@
 
 import base64
 import os
+import re
 import sys
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict
 import requests
 
-
 def getenv_required(name: str) -> str:
-    val = os.getenv(name)
-    if val is None or val.strip() == "":
-        print(f"ERROR: Missing required environment variable: {name}")
+    v = os.getenv(name)
+    if v is None or v.strip() == "":
+        print(f"ERROR: missing env var {name}")
         sys.exit(1)
-    return val.strip()
+    return v.strip()
 
 def getenv_default(name: str, default: str) -> str:
-    val = os.getenv(name)
-    return default if val is None or val.strip() == "" else val.strip()
+    v = os.getenv(name)
+    return default if v is None or v.strip() == "" else v.strip()
 
 def getenv_int(name: str) -> int:
     raw = getenv_required(name)
     try:
         return int(raw.strip())
     except ValueError:
-        print(f"ERROR: Env var {name} must be an integer; got '{raw}'")
+        print(f"ERROR: {name} must be integer, got '{raw}'")
         sys.exit(1)
 
-GITHUB_TOKEN = getenv_required("GITHUB_TOKEN")
-ORG = getenv_default("ORG", "JHDevOps")
-NUM_REPOS = getenv_int("NUM_REPOS")
-NUM_CODEOWNERS = getenv_int("NUM_CODEOWNERS")
-REQUIRED_APPROVALS = getenv_int("REQUIRED_APPROVALS")
-
+def split_csv(s: str) -> List[str]:
+    return [x.strip() for x in s.split(",") if x.strip()]
 
 def normalize_owner(s: str) -> str:
     s = s.strip()
     if not s:
         return s
-    if not s.startswith("@"):
-        return f"@{s}"
-    return s
+    return s if s.startswith("@") else f"@{s}"
 
-CODEOWNERS_USERS: List[str] = []
-for i in range(1, NUM_CODEOWNERS + 1):
-    v = getenv_required(f"CODEOWNER_{i}")
-    norm = normalize_owner(v)
-    if norm and norm not in CODEOWNERS_USERS:
-        CODEOWNERS_USERS.append(norm)
-
-if not CODEOWNERS_USERS:
-    print("ERROR: No CODEOWNERS provided after normalization.")
-    sys.exit(1)
-
+GITHUB_TOKEN = getenv_required("GITHUB_TOKEN")
+ORG = getenv_default("ORG", "JHDevOps")
+REQUIRED_APPROVALS = getenv_int("REQUIRED_APPROVALS")
+REPOS = split_csv(getenv_required("REPOS"))
+CODEOWNERS = [o for o in [normalize_owner(x) for x in split_csv(getenv_required("CODEOWNERS"))] if o]
+seen = set()
+CODEOWNERS = [x for x in CODEOWNERS if not (x.lower() in seen or seen.add(x.lower()))]
+PAIR_TEXT = getenv_required("REPO_BRANCH_PAIRS")
 
 API = "https://api.github.com"
 HDRS = {
@@ -58,7 +49,6 @@ HDRS = {
     "Accept": "application/vnd.github.v3+json",
     "Content-Type": "application/json",
 }
-
 
 def gh_get(url, **kwargs):
     return requests.get(url, headers=HDRS, **kwargs)
@@ -78,7 +68,6 @@ def gh_put_contents(owner: str, repo: str, path: str, content_bytes: bytes, mess
         body["sha"] = sha
     return requests.put(url, headers=HDRS, json=body)
 
-
 def list_branches(owner: str, repo: str) -> List[str]:
     branches = []
     page = 1
@@ -86,23 +75,24 @@ def list_branches(owner: str, repo: str) -> List[str]:
         url = f"{API}/repos/{owner}/{repo}/branches?per_page=100&page={page}"
         r = gh_get(url)
         if r.status_code != 200:
-            print(f"Unable to list branches for {repo}: {r.status_code} {r.text}")
+            print(f"{repo}: cannot list branches {r.status_code} {r.text}")
             break
         items = r.json()
         if not items:
             break
         for b in items:
-            if b.get("name"):
-                branches.append(b["name"])
+            n = b.get("name")
+            if n:
+                branches.append(n)
         page += 1
     return branches
 
 def resolve_branch_case_insensitive(owner: str, repo: str, desired_name: str, cached_branches: Optional[List[str]] = None) -> Optional[str]:
     if cached_branches is None:
         cached_branches = list_branches(owner, repo)
-    desired_lower = desired_name.strip().lower()
+    dl = desired_name.strip().lower()
     for b in cached_branches:
-        if b.lower() == desired_lower:
+        if b.lower() == dl:
             return b
     return None
 
@@ -116,24 +106,19 @@ def get_existing_content_sha(owner: str, repo: str, path: str, branch: str) -> T
 
 def ensure_codeowners(owner: str, repo: str, branch: str, users: List[str]) -> bool:
     path = ".github/CODEOWNERS"
-    content = (f"# All files require reviews from these Code Owners\n"
-               f"* {' '.join(users)}\n")
+    content = "# Managed by automation\n# All files require reviews from these Code Owners\n* " + " ".join(users) + "\n"
     sha, _ = get_existing_content_sha(owner, repo, path, branch)
     if sha:
-        resp = gh_put_contents(owner, repo, path, content.encode("utf-8"),
-                               message="chore: update CODEOWNERS",
-                               branch=branch, sha=sha)
+        resp = gh_put_contents(owner, repo, path, content.encode("utf-8"), "chore: update CODEOWNERS", branch, sha=sha)
         if resp.status_code in (200, 201):
-            print(f"Updated CODEOWNERS on {repo}:{branch}")
+            print(f"{repo}:{branch}: CODEOWNERS updated")
             return True
     else:
-        resp = gh_put_contents(owner, repo, path, content.encode("utf-8"),
-                               message="chore: add CODEOWNERS",
-                               branch=branch)
+        resp = gh_put_contents(owner, repo, path, content.encode("utf-8"), "chore: add CODEOWNERS", branch)
         if resp.status_code in (200, 201):
-            print(f"Created CODEOWNERS on {repo}:{branch}")
+            print(f"{repo}:{branch}: CODEOWNERS created")
             return True
-    print(f"Failed CODEOWNERS on {repo}:{branch} -> {resp.status_code} {resp.text}")
+    print(f"{repo}:{branch}: CODEOWNERS failed {resp.status_code} {resp.text}")
     return False
 
 def protect_branch(owner: str, repo: str, branch: str) -> bool:
@@ -145,61 +130,64 @@ def protect_branch(owner: str, repo: str, branch: str) -> bool:
             "dismiss_stale_reviews": True,
             "require_code_owner_reviews": True,
             "required_approving_review_count": REQUIRED_APPROVALS,
-            "require_last_push_approval": False,
+            "require_last_push_approval": False
         },
         "restrictions": None,
         "allow_force_pushes": False,
         "allow_deletions": False,
         "required_linear_history": False,
         "block_creations": False,
-        "required_conversation_resolution": True,
+        "required_conversation_resolution": True
     }
     r = gh_put(url, json=payload)
     if r.status_code in (200, 201):
-        print(f"Branch protection set on {repo}:{branch}")
+        print(f"{repo}:{branch}: protection set")
         return True
-    print(f"Failed protection on {repo}:{branch} -> {r.status_code} {r.text}")
+    print(f"{repo}:{branch}: protection failed {r.status_code} {r.text}")
     return False
 
-
-def parse_repo_branches_from_env() -> List[Tuple[str, List[str]]]:
-    out = []
-    for i in range(1, NUM_REPOS + 1):
-        repo = getenv_required(f"REPO_{i}")
-        branches_csv = getenv_required(f"REPO_{i}_BRANCHES")
-        branches = [b.strip() for b in branches_csv.split(",") if b.strip()]
-        if not branches:
-            print(f"ERROR: REPO_{i}_BRANCHES produced no valid branch names.")
+def parse_pairs(text: str) -> List[Tuple[str,str]]:
+    pairs = []
+    for token in split_csv(text):
+        m = re.fullmatch(r"\[(.+?)\]-\[(.+?)\]", token)
+        if not m:
+            print(f"pair parse error for token '{token}', expected format [repo]-[branch]")
             sys.exit(1)
-        out.append((repo, branches))
-    return out
+        repo = m.group(1).strip()
+        branch = m.group(2).strip()
+        if not repo or not branch:
+            print(f"pair contains empty repo or branch in token '{token}'")
+            sys.exit(1)
+        pairs.append((repo, branch))
+    return pairs
 
 def main():
-    print(f"ORG={ORG}")
-    print(f"NUM_REPOS={NUM_REPOS}")
-    print(f"NUM_CODEOWNERS={NUM_CODEOWNERS}")
-    print(f"REQUIRED_APPROVALS={REQUIRED_APPROVALS}")
-    print(f"CODEOWNERS={', '.join(CODEOWNERS_USERS)}")
-
-    repos_and_branches = parse_repo_branches_from_env()
-
-    for repo, desired_branches in repos_and_branches:
-        print(f"\n=== {ORG}/{repo} ===")
+    if not CODEOWNERS:
+        print("ERROR: CODEOWNERS empty after normalization")
+        sys.exit(1)
+    repo_set = {r.strip().lower() for r in REPOS}
+    pairs = parse_pairs(PAIR_TEXT)
+    by_repo: Dict[str, List[str]] = {}
+    for repo, br in pairs:
+        key = repo.strip()
+        by_repo.setdefault(key, []).append(br.strip())
+    for repo, desired_branches in by_repo.items():
+        if repo.lower() not in repo_set:
+            print(f"{repo}: not listed in REPOS, skipping")
+            continue
+        print(f"{ORG}/{repo}")
         branch_list = list_branches(ORG, repo)
         if not branch_list:
-            print(f" No branches found for repo '{repo}'. Skipping.")
+            print(f"{repo}: no branches listed or access error")
             continue
-
         for desired in desired_branches:
-            actual_branch = resolve_branch_case_insensitive(ORG, repo, desired, cached_branches=branch_list)
-            if not actual_branch:
-                print(f" Branch '{desired}' not found in {repo}. Skipping.")
+            actual = resolve_branch_case_insensitive(ORG, repo, desired, branch_list)
+            if not actual:
+                print(f"{repo}: branch '{desired}' not found")
                 continue
-
-            ensure_codeowners(ORG, repo, actual_branch, CODEOWNERS_USERS)
-            protect_branch(ORG, repo, actual_branch)
-
-    print("\nDone.")
+            ensure_codeowners(ORG, repo, actual, CODEOWNERS)
+            protect_branch(ORG, repo, actual)
+    print("Done.")
 
 if __name__ == "__main__":
     main()
