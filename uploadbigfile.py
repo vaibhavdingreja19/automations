@@ -1,50 +1,64 @@
-import base64
-import requests
-import os
+# push_with_lfs.py
+import os, shutil, subprocess, tempfile, sys
+from pathlib import Path
 
-# ==== USER INPUTS ====
-GITHUB_TOKEN = os.getenv("GITHUB_PAT")  # store token in env var
-REPO = "JHDevOps/DIME_LIFE"             # org/repo
-BRANCH = "feature/VINTF-8836"           # branch
-TARGET_PATH = "JHIM_LIFE/UNIX/CODE/SCRIPTS/MarketoAdapterMagiclink.jar"  
-LOCAL_FILE = "MarketoAdapterMagiclink.jar"
-COMMIT_MESSAGE = "Add large file via API"
+# --------- inputs ----------
+REPO = "JHDevOps/DIME_LIFE"                     # org/repo
+BRANCH = "feature/VINTF-8836"                   # branch to push to
+TARGET_PATH_IN_REPO = "JHIM_LIFE/UNIX/CODE/SCRIPTS/MarketoAdapterMagiclink.jar"
+LOCAL_FILE = r"C:\Users\dingrva\teamcity_automation\MarketoAdapterMagiclink.jar"
 
-# ==== SCRIPT ====
-def upload_file():
-    with open(LOCAL_FILE, "rb") as f:
-        content = f.read()
-    b64_content = base64.b64encode(content).decode("utf-8")
+# Use SSH by default. If you prefer PAT over HTTPS, set:
+# REMOTE = f"https://<TOKEN>@github.com/{REPO}.git"
+REMOTE = f"git@github.com:{REPO}.git"
+COMMIT_MESSAGE = f"Add {Path(TARGET_PATH_IN_REPO).name} via LFS"
 
-    url = f"https://api.github.com/repos/{REPO}/contents/{TARGET_PATH}"
-    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+# --------- helpers ----------
+def run(cmd, cwd=None):
+    print(f"$ {' '.join(cmd)}")
+    res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    if res.returncode != 0:
+        print(res.stdout)
+        print(res.stderr)
+        sys.exit(res.returncode)
+    return res.stdout.strip()
 
-    # Step 1: Check if file already exists
-    response = requests.get(url, headers=headers, params={"ref": BRANCH})
-    if response.status_code == 200:
-        sha = response.json()["sha"]
-        print(f"ℹ️ File already exists in repo. Updating it (sha={sha})...")
-    else:
-        sha = None
-        print("ℹ️ File does not exist. Creating new one...")
+# --------- main ----------
+def main():
+    if not Path(LOCAL_FILE).exists():
+        print(f"Local file not found: {LOCAL_FILE}")
+        sys.exit(1)
 
-    # Step 2: Upload (create or update)
-    data = {
-        "message": COMMIT_MESSAGE,
-        "branch": BRANCH,
-        "content": b64_content,
-    }
-    if sha:
-        data["sha"] = sha  # required for updating
+    with tempfile.TemporaryDirectory() as tmp:
+        repo_dir = Path(tmp, "repo")
+        # 1) clone the repo and checkout the branch
+        run(["git", "clone", "--branch", BRANCH, "--depth", "1", REMOTE, str(repo_dir)])
 
-    put_response = requests.put(url, headers=headers, json=data)
+        # 2) ensure git lfs is installed & initialized
+        run(["git", "lfs", "install"], cwd=repo_dir)
 
-    if put_response.status_code in [200, 201]:
-        print("✅ File uploaded successfully!")
-        print("GitHub URL:", put_response.json()["content"]["html_url"])
-    else:
-        print("❌ Upload failed:", put_response.status_code, put_response.text)
+        # 3) track the file type in LFS (by extension)
+        ext = Path(LOCAL_FILE).suffix or Path(TARGET_PATH_IN_REPO).suffix
+        if ext:
+            pattern = f"*{ext}"
+            run(["git", "lfs", "track", pattern], cwd=repo_dir)
+        else:
+            # fallback: track this exact path
+            run(["git", "lfs", "track", TARGET_PATH_IN_REPO], cwd=repo_dir)
 
+        # 4) copy file into target path
+        dest = repo_dir / TARGET_PATH_IN_REPO
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(LOCAL_FILE, dest)
+
+        # 5) add, commit, push
+        run(["git", "add", ".gitattributes", TARGET_PATH_IN_REPO], cwd=repo_dir)
+        # create branch if it didn't exist (clone would fail if it didn't; but safe guard)
+        run(["git", "checkout", "-B", BRANCH], cwd=repo_dir)
+        run(["git", "commit", "-m", COMMIT_MESSAGE], cwd=repo_dir)
+        run(["git", "push", "origin", BRANCH], cwd=repo_dir)
+
+        print("✅ Pushed via Git LFS successfully.")
 
 if __name__ == "__main__":
-    upload_file()
+    main()
