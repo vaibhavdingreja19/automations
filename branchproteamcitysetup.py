@@ -193,11 +193,13 @@ if __name__ == "__main__":
     main()
 
 
-curl -s https://api.github.com/repos/git-lfs/git-lfs/releases/latest \
-| grep "browser_download_url.*linux-amd64.*tar.gz" \
-| cut -d '"' -f 4 \
-| wget -qi -
+#!/bin/bash
+set -e
 
+echo "Installing Git LFS..."
+GIT_LFS_VERSION=$(curl -s https://api.github.com/repos/git-lfs/git-lfs/releases/latest | grep tag_name | cut -d '"' -f 4)
+curl -LO https://github.com/git-lfs/git-lfs/releases/download/${GIT_LFS_VERSION}/git-lfs-${GIT_LFS_VERSION#v}-linux-amd64.tar.gz
 tar -xzf git-lfs-*-linux-amd64.tar.gz
-sudo ./git-lfs-*/install.sh   # may need sudo if installing system-wide
+sudo ./git-lfs-*/install.sh || ./git-lfs-*/install.sh
 git lfs install
+git lfs version
