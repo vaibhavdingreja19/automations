@@ -193,5 +193,11 @@ if __name__ == "__main__":
     main()
 
 
-curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | sudo bash
-sudo apt-get install -y git-lfs
+curl -s https://api.github.com/repos/git-lfs/git-lfs/releases/latest \
+| grep "browser_download_url.*linux-amd64.*tar.gz" \
+| cut -d '"' -f 4 \
+| wget -qi -
+
+tar -xzf git-lfs-*-linux-amd64.tar.gz
+sudo ./git-lfs-*/install.sh   # may need sudo if installing system-wide
+git lfs install
