@@ -4,3 +4,38 @@ Auto merge
   stderr: NOTE: Picked up JDK_JAVA_OPTIONS: --add-opens jdk.management/com.sun.management.internal=ALL-UNNAMED -XX:+IgnoreUnrecognizedVMOptions -Djava.security.manager=allow --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.rmi/sun.rmi.transport=ALL-UNNAMED
   remote: Write access to repository not granted.
   fatal: unable to access 'https://github.com/JHDevOps/CRSaleshubRegistrationAPI/': The requested URL returned error: 403.
+
+
+
+
+package _Self.buildTypes
+
+import jetbrains.buildServer.configs.kotlin.*
+
+object MergeBranchToMain : BuildType({
+    templates(AbsoluteId("JohnHancock_Aks_MergeToMain"))
+    name = "MERGE BRANCH TO MAIN"
+
+    buildNumberPattern = "${ContrastComplianceCheckUatUsc.depParamRefs.buildNumber}"
+
+    params {
+        param("GHApp.Id", "1032921")
+        param("merge.branch", "main")
+    }
+
+    vcs {
+        root(CRSaleshubRegistrationAPIGHApp)
+    }
+
+    dependencies {
+        snapshot(SmokeTestProd) {
+            onDependencyFailure = FailureAction.CANCEL
+            onDependencyCancel = FailureAction.CANCEL
+        }
+    }
+})
+
+
+
+Build finished
+14:32:26 Automatic merge failed: Cannot find destination branch to merge into: no VCS branch maps to the 'main' logical branch name according to the VCS root branch specification
