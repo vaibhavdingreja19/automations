@@ -1,0 +1,6 @@
+Auto merge
+08:44:52   Failed to merge sources in VCS root CRSaleshubRegistrationAPI_GHApp. Merge error: "C:\Program Files\Git\bin\git.exe" -c core.askpass=E:\TeamCity\temp\pass7533400083035128645.bat -c credential.helper= -c credential.helper=E:/TeamCity/temp/cred9728852845101807346.bat push https://oauth2@github.com/JHDevOps/CRSaleshubRegistrationAPI refs/heads/main command failed.
+  exit code: 128
+  stderr: NOTE: Picked up JDK_JAVA_OPTIONS: --add-opens jdk.management/com.sun.management.internal=ALL-UNNAMED -XX:+IgnoreUnrecognizedVMOptions -Djava.security.manager=allow --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.rmi/sun.rmi.transport=ALL-UNNAMED
+  remote: Write access to repository not granted.
+  fatal: unable to access 'https://github.com/JHDevOps/CRSaleshubRegistrationAPI/': The requested URL returned error: 403.
