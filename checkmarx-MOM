@@ -1,0 +1,9 @@
+The discussion focused on the current status and next steps related to Checkmarx licensing, setup, and migration. Dan and the team reviewed the ongoing coordination between Checkmarx, JHancock, and Manulife regarding the procurement of the new SaaS license. The previous Checkmarx license has expired, and the team is waiting for CRG to finalize the SaaS license and provide the necessary updates.
+
+Until the new license is issued, setup and project configurations are on hold. Once the license is renewed, the team will proceed with project setup, scans, and migration activities in collaboration with Checkmarx, who will assist in transitioning from the on-premise setup to the cloud (Checkmarx One). The current target completion date is December 31, 2025, after which a new CAP will be required.
+
+The team noted that the cloud license expired in August, and no new work can begin until a purchase order under the MSA is approved. Checkmarx has committed to helping migrate suppression files during the transition. All ongoing on-prem projects will be moved to CxOne once the licensing issue is resolved.
+
+Due to the current code freeze, scans cannot be run in CxOne as the old on-prem instance is blocked. Once the purchase order is approved, both on-prem and cloud environments will be available again. Until then, Checkmarx and Manulife are coordinating to obtain an exemption allowing temporary use.
+
+Additionally, the team will attempt to configure scans for the TeamCity production environment. Although the license limitation may prevent successful execution, the setup process will be initiated. Dan has a follow-up meeting scheduled at 12:30 PM today with Checkmarx representatives to receive further updates and will share the outcomes afterward.
