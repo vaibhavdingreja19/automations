@@ -287,3 +287,6 @@ def main():
     logging.info("==== SUMMARY ====")
     for k, v in summary.items():
         logging.info("%s: %d", k, v)
+
+if __name__ == "__main__":
+    main()
