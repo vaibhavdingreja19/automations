@@ -119,21 +119,27 @@ class GitHubClient:
 
 
 def make_private_if_needed(gh, owner, repo, meta):
-    if meta.get("private", False):
-        logging.info("Already private.")
-        return True
+    visibility = meta.get("visibility")
+    is_private_flag = meta.get("private", False)
 
-    # Try to force internal/public -> private in one go
+    logging.info("Current visibility=%s private=%s", visibility, is_private_flag)
+
+    # If visibility is already private, no change needed
+    if visibility == "private":
+        logging.info("Already visibility=private.")
+        return False   # return False = no change done
+
+    # For public or internal, force to private
     payload = {"private": True, "visibility": "private"}
     ok, status, body = gh.update_repo(owner, repo, payload)
     if ok:
-        logging.info("→ Made private")
+        logging.info("→ Changed visibility to private")
         return True
 
-    # If policy blocks, log clearly (don’t fail the whole run)
     if status in (403, 422):
         msg = body.get("message") if isinstance(body, dict) else str(body)
-        logging.warning("Could not change visibility to private (policy?) for %s/%s: %s", owner, repo, msg)
+        logging.warning("Could not change visibility to private for %s/%s: %s",
+                        owner, repo, msg)
         return False
 
     return False
@@ -223,7 +229,11 @@ def revoke_all_invitations(gh, owner, repo):
 
 
 def main():
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-8s | %(message)s", datefmt="%H:%M:%S")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)-8s | %(message)s",
+        datefmt="%H:%M:%S"
+    )
     gh = GitHubClient(GITHUB_PAT)
 
     # Read first column; header can be anything
@@ -231,35 +241,44 @@ def main():
     first_col = df.columns[0]
     entries = [str(v).strip() for v in df[first_col].dropna() if str(v).strip()]
 
-    summary = {"processed": 0, "made_private": 0, "archived": 0, "collab_removed": 0, "teams_removed": 0, "inv_revoked": 0, "errors": 0}
+    summary = {
+        "processed": 0,
+        "made_private": 0,
+        "archived": 0,
+        "collab_removed": 0,
+        "teams_removed": 0,
+        "inv_revoked": 0,
+        "errors": 0
+    }
 
     for entry in entries:
-        repo = entry.split("/")[-1]  # allow 'repo' or 'something/repo'
+        repo = entry.split("/")[-1]  # allow 'repo' or 'path/repo'
         owner = ORG
         logging.info("=== Processing %s/%s ===", owner, repo)
 
+        # Fetch repo metadata
         meta = gh.get_repo(owner, repo)
         if not meta:
             summary["errors"] += 1
             continue
 
-        # 1) make private before archival (internal/public -> private)
-        if make_private_if_needed(gh, owner, repo, meta):
+        # 1) Try to force internal/public → private
+        changed_visibility = make_private_if_needed(gh, owner, repo, meta)
+        if changed_visibility:
             summary["made_private"] += 1
 
-        # 2) archive
-        # refresh meta so we see current archived flag if needed
+        # 2) Archive repository
         meta2 = gh.get_repo(owner, repo) or {}
         if archive_if_needed(gh, owner, repo, meta2):
             summary["archived"] += 1
 
-        # 3) remove all collaborators (any role incl. admin/maintain) at repo level
+        # 3) Remove collaborators
         summary["collab_removed"] += remove_all_collaborators(gh, owner, repo)
 
-        # 4) remove all team mappings (teams often carry admin/maintain)
+        # 4) Remove any team access
         summary["teams_removed"] += remove_all_teams(gh, owner, repo)
 
-        # 5) revoke any pending invitations
+        # 5) Revoke pending invitations
         summary["inv_revoked"] += revoke_all_invitations(gh, owner, repo)
 
         summary["processed"] += 1
@@ -268,7 +287,3 @@ def main():
     logging.info("==== SUMMARY ====")
     for k, v in summary.items():
         logging.info("%s: %d", k, v)
-
-
-if __name__ == "__main__":
-    main()
