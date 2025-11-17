@@ -51,8 +51,8 @@ APPS: Dict[str, Dict[str, str]] = {
     
 }
 
-# NEW: hard-coded team slug to receive READ access (change this)
-READ_TEAM_SLUG = "platform-readers"
+
+READ_TEAM_SLUG = "jh_devops_pipeline_team_acl"
 
 log = logging.getLogger("gh-app-repos")
 logging.basicConfig(level=logging.INFO,
@@ -170,12 +170,9 @@ def find_repo_in_any_app(repo_id: int) -> Optional[Tuple[str, int]]:
             continue
     return None
 
-# NEW: helper to grant READ access to a single team
+
 def grant_team_repo_access_read(pat: str, org: str, repo: str, team_slug: str):
-    """
-    Ensures team `team_slug` in org `org` has READ (pull) access to `org/repo`.
-    Requires an org admin PAT. Idempotent (201/204).
-    """
+   
     url = f"{BASE_URL}/orgs/{org}/teams/{team_slug}/repos/{org}/{repo}"
     headers = {"Authorization": f"token {pat}", "Accept": "application/vnd.github+json"}
     payload = {"permission": "pull"}  # READ
