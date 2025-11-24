@@ -1,0 +1,62 @@
+function Get-ADInfoFromJHinfatools {
+    param(
+        [string]$Username,
+        [string]$Domain = "MFCGD"
+    )
+
+    $url = "https://jhinfatools.jhancock.com/activedirectory/ActiveDirectory.cgi?domain=$Domain&type=User&pattern=$Username&rm=findUsersOrGroups"
+
+    # Call internal AD lookup with Windows SSO
+    $response = Invoke-WebRequest $url -UseDefaultCredentials
+
+    # Split into lines
+    $lines = $response.Content -split "`n"
+
+    # Find the line containing the <pre> block with user data
+    $target = $lines | Where-Object { $_ -match "\\$Username" -and $_ -match "@" }
+
+    if (-not $target) {
+        return $null
+    }
+
+    # Clean HTML tags
+    $plain = ($target -replace "<[^>]+>", " ").Trim()
+
+    # Turn multiple spaces into single space
+    $plain = ($plain -replace "\s+", " ")
+
+    # Sample plain text now looks like:
+    # MFCGD\dingrva Vaibhav Dingreja /N/... VDingreja@jhancock.com US CN=...
+
+    $parts = $plain.Split(" ")
+
+    $domainUser = $parts[0]
+    $email      = ($parts | Where-Object { $_ -match "@" })[0]
+
+    $domain, $user = $domainUser.Split("\\")
+
+    # Everything between username and email = display name
+    $nameTokens = @()
+    foreach ($p in $parts[1..($parts.Count-1)]) {
+        if ($p -eq $email -or $p.StartsWith("/") -or $p.StartsWith("CN=")) { break }
+        $nameTokens += $p
+    }
+
+    $displayName = $nameTokens -join " "
+
+    # Split into first/last
+    $firstName = $nameTokens[0]
+    $lastName = if ($nameTokens.Count -gt 1) { $nameTokens[1..($nameTokens.Count-1)] -join " " } else { "" }
+
+    return [PSCustomObject]@{
+        Username     = $user
+        Domain       = $domain
+        DisplayName  = $displayName
+        FirstName    = $firstName
+        LastName     = $lastName
+        Email        = $email
+    }
+}
+
+# TEST
+Get-ADInfoFromJHinfatools -Username "dingrva"
