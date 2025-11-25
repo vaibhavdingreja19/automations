@@ -1,23 +1,21 @@
-import os
-import sys
 import requests
-from typing import Dict, List, Optional
 from openpyxl import Workbook
 
-# ---------------- CONFIG ----------------
-ORG_NAME = "JHDevOps"                    # GitHub org name
-TOKEN_ENV_VAR = "GITHUB_TOKEN"          # Put your PAT in this env var
-OUTPUT_XLSX = "github_acl_access.xlsx"  # Output file name
-# ----------------------------------------
+# ----------------- CONFIG -----------------
+PAT = "PUT_YOUR_PAT_HERE"          # <<< HARD-CODE YOUR PAT HERE
+ORG_NAME = "JHDevOps"
+OUTPUT_FILE = "github_acl_access.xlsx"
+# -------------------------------------------
 
+API_ROOT = "https://api.github.com"
 
-# How we rank permissions to find "highest"
+# Permission ranking
 PERMISSION_RANK = {
     "read": 1,
     "triage": 2,
     "write": 3,
     "maintain": 4,
-    "admin": 5,
+    "admin": 5
 }
 
 RANK_TO_NAME = {
@@ -25,152 +23,110 @@ RANK_TO_NAME = {
     2: "Triage",
     3: "Write",
     4: "Maintain",
-    5: "Admin",
+    5: "Admin"
 }
 
-API_ROOT = "https://api.github.com"
-
-
-def get_token() -> str:
-    token = os.environ.get(TOKEN_ENV_VAR)
-    if not token:
-        print(f"Error: GitHub PAT not found in env var {TOKEN_ENV_VAR}.", file=sys.stderr)
-        print(f"Set it like:\n  export {TOKEN_ENV_VAR}=your_personal_access_token", file=sys.stderr)
-        sys.exit(1)
-    return token
-
-
-def gh_headers(token: str) -> Dict[str, str]:
+def gh_headers():
     return {
-        "Authorization": f"token {token}",
-        "Accept": "application/vnd.github+json",
+        "Authorization": f"token {PAT}",
+        "Accept": "application/vnd.github+json"
     }
 
-
-def paginated_get(url: str, headers: Dict[str, str], params: Dict = None) -> List[Dict]:
-    """Simple GitHub API pagination helper."""
-    if params is None:
-        params = {}
-    params = params.copy()
-    params.setdefault("per_page", 100)
-
+def paginated(url):
+    """Handles GitHub API pagination."""
     results = []
+    params = {"per_page": 100}
+
     while url:
-        resp = requests.get(url, headers=headers, params=params)
-        if resp.status_code != 200:
-            print(f"GitHub API error {resp.status_code} for {url}: {resp.text}", file=sys.stderr)
+        r = requests.get(url, headers=gh_headers(), params=params)
+        if r.status_code != 200:
+            print("Error:", r.text)
             break
 
-        results.extend(resp.json())
+        results.extend(r.json())
 
-        # Pagination via Link header
-        link = resp.headers.get("Link", "")
+        link = r.headers.get("Link", "")
         next_url = None
-        if link:
+        if "rel=\"next\"" in link:
             parts = link.split(",")
-            for part in parts:
-                if 'rel="next"' in part:
-                    next_url = part[part.find("<") + 1 : part.find(">")]
+            for p in parts:
+                if 'rel="next"' in p:
+                    next_url = p[p.find("<")+1 : p.find(">")]
                     break
 
         url = next_url
-        params = {}  # only needed on first request
+        params = {}
 
     return results
 
+def get_all_teams():
+    return paginated(f"{API_ROOT}/orgs/{ORG_NAME}/teams")
 
-def get_all_teams(org: str, token: str) -> List[Dict]:
-    url = f"{API_ROOT}/orgs/{org}/teams"
-    return paginated_get(url, gh_headers(token))
+def get_team_repos(team_slug):
+    return paginated(f"{API_ROOT}/orgs/{ORG_NAME}/teams/{team_slug}/repos")
 
-
-def get_team_repos(org: str, team_slug: str, token: str) -> List[Dict]:
-    url = f"{API_ROOT}/orgs/{org}/teams/{team_slug}/repos"
-    return paginated_get(url, gh_headers(token))
-
-
-def highest_permission_for_team(org: str, team_slug: str, token: str) -> Optional[str]:
-    repos = get_team_repos(org, team_slug, token)
-    if not repos:
-        return None
-
-    max_rank = 0
+def find_highest_permission(team_slug):
+    repos = get_team_repos(team_slug)
+    highest = 0
 
     for repo in repos:
-        # Newer GitHub APIs sometimes give "role_name"
-        role_name = repo.get("role_name")
-        if role_name:
-            perm_key = role_name.lower()
+        # Newer GitHub API: role_name
+        role = repo.get("role_name")
+
+        if role:
+            perm = role.lower()
         else:
-            # Fallback to the legacy boolean permissions object
+            # Legacy permissions
             perms = repo.get("permissions", {})
             if perms.get("admin"):
-                perm_key = "admin"
+                perm = "admin"
             elif perms.get("maintain"):
-                perm_key = "maintain"
+                perm = "maintain"
             elif perms.get("push"):
-                perm_key = "write"
+                perm = "write"
             elif perms.get("triage"):
-                perm_key = "triage"
+                perm = "triage"
             elif perms.get("pull"):
-                perm_key = "read"
+                perm = "read"
             else:
-                # No recognizable permission, skip
                 continue
 
-        rank = PERMISSION_RANK.get(perm_key, 0)
-        if rank > max_rank:
-            max_rank = rank
+        rank = PERMISSION_RANK.get(perm, 0)
+        if rank > highest:
+            highest = rank
 
-    if max_rank == 0:
-        return None
-    return RANK_TO_NAME[max_rank]
-
-
-def create_excel(teams: List[Dict], token: str, output_path: str) -> None:
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "GitHub ACLs"
-
-    # Header row (A–D)
-    ws["A1"] = "Domain"
-    ws["B1"] = "GroupName"
-    ws["C1"] = "Description"
-    ws["D1"] = "AccessLevel"
-
-    row = 2
-    for team in teams:
-        team_name = team.get("name")      # Human-friendly name
-        team_slug = team.get("slug")      # Slug for API calls
-
-        # Always MFCGD in col A
-        ws.cell(row=row, column=1, value="MFCGD")
-        ws.cell(row=row, column=2, value=team_name)
-
-        # Column C left empty intentionally
-        # ws.cell(row=row, column=3).value = ""  # not strictly needed
-
-        highest_perm = highest_permission_for_team(ORG_NAME, team_slug, token)
-        if highest_perm:
-            ws.cell(row=row, column=4, value=highest_perm)
-        else:
-            ws.cell(row=row, column=4, value="")  # no repos / no perms
-
-        print(f"{team_name}: {highest_perm}")
-        row += 1
-
-    wb.save(output_path)
-    print(f"\nExcel written to: {output_path}")
-
+    if highest == 0:
+        return ""
+    return RANK_TO_NAME[highest]
 
 def main():
-    token = get_token()
-    print(f"Fetching teams for org: {ORG_NAME} ...")
-    teams = get_all_teams(ORG_NAME, token)
-    print(f"Found {len(teams)} teams.\n")
+    print("Fetching teams...")
+    teams = get_all_teams()
+    print(f"Total teams found: {len(teams)}")
 
-    create_excel(teams, token, OUTPUT_XLSX)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "ACL"
 
+    # Header
+    ws.append(["Domain", "GroupName", "Description", "AccessLevel"])
 
-if __name__ == "__main__":
-    main()
+    for t in teams:
+        name = t.get("name")
+        slug = t.get("slug")
+
+        print(f"Processing: {name}...")
+
+        highest_perm = find_highest_permission(slug)
+
+        ws.append([
+            "MFCGD",
+            name,
+            "",
+            highest_perm
+        ])
+
+    wb.save(OUTPUT_FILE)
+    print(f"\nExcel generated: {OUTPUT_FILE}")
+
+main()
