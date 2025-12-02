@@ -1,3 +1,8 @@
+On production (plugin 2020.x), SonarQube scanner tool is only installed on a single agent node — causing build scheduling limitations.
+On test (plugin 2025.03-76), SonarQube scanner is automatically distributed to all agents, visible in Administration → Tools and Agents → Tools tabs. This confirms fix TW-86536 for multi-node installing behavior.
+
+
+
 import os
 import sys
 import base64
