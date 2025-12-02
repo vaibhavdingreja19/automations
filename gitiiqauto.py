@@ -1,132 +1,135 @@
+import os
+import sys
+import base64
+import argparse
+from urllib.parse import urlparse
 import requests
-from openpyxl import Workbook
-
-# ----------------- CONFIG -----------------
-PAT = "PUT_YOUR_PAT_HERE"          # <<< HARD-CODE YOUR PAT HERE
-ORG_NAME = "JHDevOps"
-OUTPUT_FILE = "github_acl_access.xlsx"
-# -------------------------------------------
 
 API_ROOT = "https://api.github.com"
 
-# Permission ranking
-PERMISSION_RANK = {
-    "read": 1,
-    "triage": 2,
-    "write": 3,
-    "maintain": 4,
-    "admin": 5
-}
 
-RANK_TO_NAME = {
-    1: "Read",
-    2: "Triage",
-    3: "Write",
-    4: "Maintain",
-    5: "Admin"
-}
-
-def gh_headers():
+def github_headers(pat: str):
     return {
-        "Authorization": f"token {PAT}",
-        "Accept": "application/vnd.github+json"
+        "Authorization": f"token {pat}",
+        "Accept": "application/vnd.github+json",
     }
 
-def paginated(url):
-    """Handles GitHub API pagination."""
-    results = []
-    params = {"per_page": 100}
 
-    while url:
-        r = requests.get(url, headers=gh_headers(), params=params)
-        if r.status_code != 200:
-            print("Error:", r.text)
-            break
+def parse_repo_from_url(repo_url: str):
+    """
+    Convert https://github.com/JHDevOps/my-repo.git
+    -> owner: JHDevOps, repo: my-repo
+    """
+    parsed = urlparse(repo_url)
+    if "github.com" not in parsed.netloc:
+        raise ValueError(f"Not a GitHub URL: {repo_url}")
 
-        results.extend(r.json())
+    path = parsed.path.strip("/")
+    if path.endswith(".git"):
+        path = path[:-4]
 
-        link = r.headers.get("Link", "")
-        next_url = None
-        if "rel=\"next\"" in link:
-            parts = link.split(",")
-            for p in parts:
-                if 'rel="next"' in p:
-                    next_url = p[p.find("<")+1 : p.find(">")]
-                    break
+    parts = path.split("/")
+    if len(parts) != 2:
+        raise ValueError(f"Could not parse owner/repo from: {repo_url}")
 
-        url = next_url
-        params = {}
+    owner, repo = parts
+    return owner, repo
 
-    return results
 
-def get_all_teams():
-    return paginated(f"{API_ROOT}/orgs/{ORG_NAME}/teams")
+def get_existing_file_sha(owner, repo, path, branch, pat):
+    url = f"{API_ROOT}/repos/{owner}/{repo}/contents/{path}"
+    params = {"ref": branch}
+    r = requests.get(url, headers=github_headers(pat), params=params)
 
-def get_team_repos(team_slug):
-    return paginated(f"{API_ROOT}/orgs/{ORG_NAME}/teams/{team_slug}/repos")
+    if r.status_code == 200:
+        return r.json().get("sha")
+    elif r.status_code == 404:
+        return None
+    else:
+        raise RuntimeError(
+            f"Error getting existing file info: {r.status_code} {r.text}"
+        )
 
-def find_highest_permission(team_slug):
-    repos = get_team_repos(team_slug)
-    highest = 0
 
-    for repo in repos:
-        # Newer GitHub API: role_name
-        role = repo.get("role_name")
+def upload_file(owner, repo, branch, local_file, remote_path, pat, message):
+    if not os.path.exists(local_file):
+        raise FileNotFoundError(f"Local file not found: {local_file}")
 
-        if role:
-            perm = role.lower()
-        else:
-            # Legacy permissions
-            perms = repo.get("permissions", {})
-            if perms.get("admin"):
-                perm = "admin"
-            elif perms.get("maintain"):
-                perm = "maintain"
-            elif perms.get("push"):
-                perm = "write"
-            elif perms.get("triage"):
-                perm = "triage"
-            elif perms.get("pull"):
-                perm = "read"
-            else:
-                continue
+    with open(local_file, "rb") as f:
+        content_b64 = base64.b64encode(f.read()).decode("utf-8")
 
-        rank = PERMISSION_RANK.get(perm, 0)
-        if rank > highest:
-            highest = rank
+    sha = get_existing_file_sha(owner, repo, remote_path, branch, pat)
 
-    if highest == 0:
-        return ""
-    return RANK_TO_NAME[highest]
+    url = f"{API_ROOT}/repos/{owner}/{repo}/contents/{remote_path}"
+
+    payload = {
+        "message": message,
+        "content": content_b64,
+        "branch": branch,
+    }
+    if sha:
+        payload["sha"] = sha  # update existing file
+
+    r = requests.put(url, headers=github_headers(pat), json=payload)
+
+    if r.status_code not in (200, 201):
+        raise RuntimeError(
+            f"Error uploading file: {r.status_code} {r.text}"
+        )
+    else:
+        print(f"File uploaded successfully to {owner}/{repo}@{branch}:{remote_path}")
+        print(f"GitHub response: {r.status_code}")
+
 
 def main():
-    print("Fetching teams...")
-    teams = get_all_teams()
-    print(f"Total teams found: {len(teams)}")
+    parser = argparse.ArgumentParser(
+        description="Upload github_acl_access.xlsx to GitHub via API"
+    )
+    parser.add_argument(
+        "--repo-url",
+        required=True,
+        help="GitHub repo HTTPS URL, e.g. https://github.com/JHDevOps/my-repo.git",
+    )
+    parser.add_argument(
+        "--branch",
+        default="main",
+        help="Branch name to commit to (default: main)",
+    )
+    parser.add_argument(
+        "--local-file",
+        default="github_acl_access.xlsx",
+        help="Local path to the Excel file (default: github_acl_access.xlsx)",
+    )
+    parser.add_argument(
+        "--remote-path",
+        required=True,
+        help="Path inside the repo where file should be stored, "
+             "e.g. reports/github_acl_access.xlsx",
+    )
+    parser.add_argument(
+        "--commit-message",
+        default="Update GitHub ACL access report from TeamCity",
+        help="Commit message for the upload",
+    )
+    args = parser.parse_args()
 
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "ACL"
+    pat = os.environ.get("GITHUB_PAT")
+    if not pat:
+        print("ERROR: GITHUB_PAT environment variable is not set.")
+        sys.exit(1)
 
-    # Header
-    ws.append(["Domain", "GroupName", "Description", "AccessLevel"])
+    owner, repo = parse_repo_from_url(args.repo_url)
 
-    for t in teams:
-        name = t.get("name")
-        slug = t.get("slug")
+    upload_file(
+        owner=owner,
+        repo=repo,
+        branch=args.branch,
+        local_file=args.local_file,
+        remote_path=args.remote_path,
+        pat=pat,
+        message=args.commit_message,
+    )
 
-        print(f"Processing: {name}...")
 
-        highest_perm = find_highest_permission(slug)
-
-        ws.append([
-            "MFCGD",
-            name,
-            "",
-            highest_perm
-        ])
-
-    wb.save(OUTPUT_FILE)
-    print(f"\nExcel generated: {OUTPUT_FILE}")
-
-main()
+if __name__ == "__main__":
+    main()
