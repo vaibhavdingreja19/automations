@@ -1,0 +1,13 @@
+for id in $(curl -s \
+  -H "Accept: application/vnd.github+json" \
+  -H "Authorization: Bearer YOUR_PAT_HERE" \
+  https://api.github.com/orgs/JHDevOps/rulesets \
+  | grep '"id"' | awk '{print $2}' | tr -d ","); do
+
+  curl \
+    -H "Accept: application/yaml" \
+    -H "Authorization: Bearer YOUR_PAT_HERE" \
+    https://api.github.com/orgs/JHDevOps/rulesets/$id \
+    -o "ruleset_$id.yaml"
+
+done
