@@ -1,6 +1,7 @@
 import os
 import requests
 import time
+import json
 
 # -----------------------------------------
 # CONFIG
@@ -8,18 +9,15 @@ import time
 
 ORG = "JHDevOps"
 
-# Use environment variable OR hard-code if testing locally
+# Use environment variable OR hard-code for testing
 TOKEN = os.getenv("GITHUB_PAT")
-# TOKEN = "ghp_xxxxxx"  # <-- uncomment for local/testing usage
+# TOKEN = "ghp_xxxxxxxx"  # uncomment if needed
 
 API = "https://api.github.com"
-HEADERS_JSON = {
+
+HEADERS = {
     "Authorization": f"Bearer {TOKEN}",
     "Accept": "application/vnd.github+json"
-}
-HEADERS_YAML = {
-    "Authorization": f"Bearer {TOKEN}",
-    "Accept": "application/yaml"
 }
 
 
@@ -34,7 +32,7 @@ def get_ruleset_ids():
 
     while url:
         print(f"Requesting: {url}")
-        r = requests.get(url, headers=HEADERS_JSON)
+        r = requests.get(url, headers=HEADERS)
 
         if r.status_code != 200:
             print(f"ERROR: HTTP {r.status_code}")
@@ -42,7 +40,6 @@ def get_ruleset_ids():
             break
 
         data = r.json()
-
         for rs in data:
             ids.append(rs["id"])
 
@@ -60,23 +57,24 @@ def get_ruleset_ids():
 
 
 # -----------------------------------------
-# EXPORT A SINGLE RULESET AS YAML
+# EXPORT A SINGLE RULESET AS JSON
 # -----------------------------------------
 
-def export_ruleset_yaml(ruleset_id):
+def export_ruleset_json(ruleset_id):
     url = f"{API}/orgs/{ORG}/rulesets/{ruleset_id}"
 
-    r = requests.get(url, headers=HEADERS_YAML)
+    r = requests.get(url, headers=HEADERS)
 
     if r.status_code != 200:
         print(f"ERROR fetching ruleset {ruleset_id}: HTTP {r.status_code}")
         print(r.text)
         return
 
-    filename = f"ruleset_{ruleset_id}.yaml"
+    data = r.json()
 
-    with open(filename, "wb") as f:
-        f.write(r.content)
+    filename = f"ruleset_{ruleset_id}.json"
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
 
     print(f"✔ Exported {filename}")
 
@@ -87,18 +85,17 @@ def export_ruleset_yaml(ruleset_id):
 
 if __name__ == "__main__":
     if not TOKEN:
-        raise SystemExit("❌ ERROR: No GitHub PAT set. Set env GITHUB_PAT or hard-code TOKEN.")
+        raise SystemExit("❌ ERROR: No GitHub PAT set (env GITHUB_PAT).")
 
     print(f"🔐 GitHub Org: {ORG}")
     print("📥 Collecting ruleset IDs...")
 
     ids = get_ruleset_ids()
-
     print(f"📦 Found {len(ids)} rulesets")
 
     for idx, ruleset_id in enumerate(ids, start=1):
         print(f"[{idx}/{len(ids)}] Exporting ruleset {ruleset_id}...")
-        export_ruleset_yaml(ruleset_id)
-        time.sleep(1)  # avoid GitHub rate limits (safe + polite)
+        export_ruleset_json(ruleset_id)
+        time.sleep(1)  # optional polite delay
 
-    print("\n🎉 DONE! All org rulesets exported as YAML.")
+    print("\n🎉 DONE! All org rulesets exported as JSON.")
