@@ -1,127 +1,124 @@
-import requests
-import time
-import pandas as pd
-from datetime import datetime, timedelta
 import os
+import time
+import requests
+import pandas as pd
+from datetime import datetime
 
 
-TOKEN = os.getenv('GITHUB_PAT')
+# ------------ CONFIG -----------------
+TOKEN = os.getenv("GITHUB_PAT")   # or put your PAT directly below
+# TOKEN = "YOUR_PAT_HERE"         # <<< if you want to hard code it
+
 ORG_NAME = "JHDevOps"
-YEARS_THRESHOLD = 3
-REPOS_PER_PAGE = 50
-BRANCHES_PER_PAGE = 100
 GRAPHQL_URL = "https://api.github.com/graphql"
 
+# <<< HARD CODED PARAMETER >>>
+CUTOFF_DATE_STR = "01/09/2017"    # DD/MM/YYYY
+# ------------------------------------
 
-headers = {
-    "Authorization": f"bearer {TOKEN}",
-    "Content-Type": "application/json"
-}
 
-cutoff_date = datetime.utcnow() - timedelta(days=YEARS_THRESHOLD * 365)
+def github_headers():
+    return {
+        "Authorization": f"bearer {TOKEN}",
+        "Content-Type": "application/json",
+    }
 
 
 def run_graphql_query(query, variables=None):
     while True:
-        response = requests.post(GRAPHQL_URL, json={"query": query, "variables": variables}, headers=headers)
-        if response.status_code == 200:
-            return response.json()
-        elif response.status_code == 502:
-            print("502 error, retrying after 5 seconds...")
+        r = requests.post(
+            GRAPHQL_URL,
+            json={"query": query, "variables": variables},
+            headers=github_headers(),
+        )
+
+        if r.status_code == 200:
+            return r.json()
+        elif r.status_code == 502:
+            print("502 from GitHub, retrying in 5 secs...")
             time.sleep(5)
         else:
-            print(f"Error {response.status_code}: {response.text}")
+            print(f"Error {r.status_code}: {r.text}")
             time.sleep(10)
 
 
-def get_all_repos():
-    repos = []
+def get_inactive_repos(cutoff_dt):
+    inactive = []
     has_next_page = True
     end_cursor = None
 
-    while has_next_page:
-        query = """
-        query($org: String!, $cursor: String) {
-          organization(login: $org) {
-            repositories(first: 50, after: $cursor) {
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-              nodes {
-                name
-              }
-            }
+    query = """
+    query($org: String!, $cursor: String) {
+      organization(login: $org) {
+        repositories(
+          first: 100,
+          after: $cursor,
+          orderBy: {field: PUSHED_AT, direction: ASC}
+        ) {
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          nodes {
+            name
+            isArchived
+            pushedAt
+            updatedAt
           }
         }
-        """
+      }
+    }
+    """
+
+    while has_next_page:
         variables = {"org": ORG_NAME, "cursor": end_cursor}
         result = run_graphql_query(query, variables)
-        repos_data = result['data']['organization']['repositories']
-        repos.extend([repo['name'] for repo in repos_data['nodes']])
-        has_next_page = repos_data['pageInfo']['hasNextPage']
-        end_cursor = repos_data['pageInfo']['endCursor']
-    return repos
+        repos_data = result["data"]["organization"]["repositories"]
+
+        for repo in repos_data["nodes"]:
+            name = repo["name"]
+            pushed_at_str = repo["pushedAt"]
+            updated_at_str = repo["updatedAt"]
+            archived = repo["isArchived"]
+
+            # Some repos may not have pushedAt (never pushed)
+            if pushed_at_str:
+                pushed_at = datetime.strptime(pushed_at_str, "%Y-%m-%dT%H:%M:%SZ")
+            else:
+                pushed_at = datetime.min
+
+            if pushed_at < cutoff_dt:
+                inactive.append(
+                    {
+                        "Repository": name,
+                        "Archived": archived,
+                        "Last Push (pushedAt)": pushed_at_str,
+                        "Last Updated (updatedAt)": updated_at_str,
+                    }
+                )
+
+        has_next_page = repos_data["pageInfo"]["hasNextPage"]
+        end_cursor = repos_data["pageInfo"]["endCursor"]
+
+    return inactive
 
 
-def check_repo_all_branches_old(repo_name):
-    has_next_page = True
-    end_cursor = None
-
-    while has_next_page:
-        query = """
-        query($org: String!, $repo: String!, $cursor: String) {
-          repository(owner: $org, name: $repo) {
-            refs(refPrefix: "refs/heads/", first: 100, after: $cursor) {
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-              nodes {
-                name
-                target {
-                  ... on Commit {
-                    committedDate
-                  }
-                }
-              }
-            }
-          }
-        }
-        """
-        variables = {"org": ORG_NAME, "repo": repo_name, "cursor": end_cursor}
-        result = run_graphql_query(query, variables)
-        refs = result['data']['repository']['refs']
-
-        for branch in refs['nodes']:
-            date_str = branch['target']['committedDate']
-            commit_datetime = datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%SZ")
-            if commit_datetime >= cutoff_date:
-                return False  # Found a recent commit
-
-        has_next_page = refs['pageInfo']['hasNextPage']
-        end_cursor = refs['pageInfo']['endCursor']
-
-    return True  
-
-
-def main():
-    all_repos = get_all_repos()
-    print(f"Total repos found: {len(all_repos)}")
-    inactive_repos = []
-
-    for repo in all_repos:
-        print(f"Checking {repo}...")
-        try:
-            if check_repo_all_branches_old(repo):
-                inactive_repos.append(repo)
-        except Exception as e:
-            print(f"Error checking {repo}: {e}")
-
-    df = pd.DataFrame(inactive_repos, columns=["Fully Inactive Repos (All Branches >2y old)"])
-    df.to_excel("inactive_repos_graphql.xlsx", index=False)
-    print("Done. Saved to 'inactive_repos_graphql.xlsx'")
-
-
+# ============ MAIN ===============
 if __name__ == "__main__":
-    main()
+
+    # Convert hard-coded date string to datetime
+    cutoff_dt = datetime.strptime(CUTOFF_DATE_STR, "%d/%m/%Y")
+    print(f"Cutoff Date: {cutoff_dt}")
+
+    if not TOKEN:
+        raise SystemExit("ERROR: GITHUB_PAT environment variable is not set.")
+
+    print("Fetching repositories...")
+    inactive_repos = get_inactive_repos(cutoff_dt)
+    print(f"Total inactive repos found: {len(inactive_repos)}")
+
+    # Export to Excel
+    output_file = "inactive_repos_graphql.xlsx"
+    pd.DataFrame(inactive_repos).to_excel(output_file, index=False)
+
+    print(f"Done. Saved to '{output_file}'")
