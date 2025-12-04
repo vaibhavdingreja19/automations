@@ -68,12 +68,75 @@ def get_all_repos():
     return repos
 
 
+def check_repo_all_branches_old(repo_name):
+    """
+    Return True if ALL branches in this repo are older than cutoff_date.
+    (Same logic as your original code, only checking committedDate.)
+    """
+    has_next_page = True
+    end_cursor = None
+
+    query = """
+    query($org: String!, $repo: String!, $cursor: String) {
+      repository(owner: $org, name: $repo) {
+        refs(refPrefix: "refs/heads/", first: 100, after: $cursor) {
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          nodes {
+            name
+            target {
+              ... on Commit {
+                committedDate
+              }
+            }
+          }
+        }
+      }
+    }
+    """
+
+    while has_next_page:
+        variables = {"org": ORG_NAME, "repo": repo_name, "cursor": end_cursor}
+        result = run_graphql_query(query, variables)
+
+        repo_data = result.get("data", {}).get("repository")
+        if not repo_data:
+            # repo might be missing / no access
+            break
+
+        refs = repo_data["refs"]
+
+        for branch in refs["nodes"]:
+            commit = branch["target"]
+            if not commit:
+                continue
+
+            date_str = commit.get("committedDate")
+            if not date_str:
+                continue
+
+            commit_datetime = datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%SZ")
+
+            # If any branch has a commit >= cutoff, repo is active
+            if commit_datetime >= cutoff_date:
+                return False
+
+        has_next_page = refs["pageInfo"]["hasNextPage"]
+        end_cursor = refs["pageInfo"]["endCursor"]
+
+    # If we never found a recent commit, consider repo fully inactive
+    return True
+
+
 def get_latest_commit_info(repo_name):
     """
-    Scan all branches in a repo and return info about the most recent commit:
-    - latest_date: datetime of latest commit (or None)
-    - latest_email: author email of latest commit
-    - latest_login: GitHub login of latest commit author (if linked)
+    For a given repo, scan all branches and return the MOST RECENT commit info:
+    - latest_date   (datetime or None)
+    - latest_email  (author email)
+    - latest_login  (GitHub username / login)
+    This is called ONLY for repos already known to be inactive.
     """
     latest_date = None
     latest_email = None
@@ -115,7 +178,6 @@ def get_latest_commit_info(repo_name):
 
         repo_data = result.get("data", {}).get("repository")
         if not repo_data:
-            # repo might be missing / no access
             break
 
         refs = repo_data["refs"]
@@ -131,10 +193,8 @@ def get_latest_commit_info(repo_name):
 
             commit_datetime = datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%SZ")
 
-            # If this commit is newer than what we have, update latest
             if latest_date is None or commit_datetime > latest_date:
                 latest_date = commit_datetime
-
                 author = commit.get("author") or {}
                 latest_email = author.get("email")
                 user = author.get("user") or {}
@@ -153,32 +213,48 @@ def get_latest_commit_info(repo_name):
 def main():
     all_repos = get_all_repos()
     print(f"Total repos found: {len(all_repos)}")
-    inactive_records = []
+
+    # PASS 1: identify inactive repos (same as original behaviour)
+    inactive_repos = []
 
     for repo in all_repos:
-        print(f"Checking {repo}...")
+        print(f"[PASS 1] Checking {repo}...")
         try:
-            info = get_latest_commit_info(repo)
-            latest_date = info["latest_date"]
-
-            # If there are no commits at all, treat as inactive
-            if latest_date is None or latest_date < cutoff_date:
-                inactive_records.append({
-                    "Repository": repo,
-                    "Last Commit Email": info["latest_email"],
-                    "Last Commit Username": info["latest_login"],
-                })
-
+            if check_repo_all_branches_old(repo):
+                inactive_repos.append(repo)
         except Exception as e:
             print(f"Error checking {repo}: {e}")
 
-    df = pd.DataFrame(inactive_records, columns=[
+    print(f"\nTotal inactive repos (all branches > {YEARS_THRESHOLD}y old): {len(inactive_repos)}")
+
+    # PASS 2: for inactive repos, get last commit email + username
+    records = []
+
+    for idx, repo in enumerate(inactive_repos, start=1):
+        print(f"[PASS 2] ({idx}/{len(inactive_repos)}) Getting last commit info for {repo}...")
+        try:
+            info = get_latest_commit_info(repo)
+            records.append({
+                "Repository": repo,
+                "Last Commit Email": info["latest_email"],
+                "Last Commit Username": info["latest_login"],
+            })
+        except Exception as e:
+            print(f"Error getting commit info for {repo}: {e}")
+            records.append({
+                "Repository": repo,
+                "Last Commit Email": None,
+                "Last Commit Username": None,
+            })
+
+    # Export to Excel
+    df = pd.DataFrame(records, columns=[
         "Repository",
         "Last Commit Email",
         "Last Commit Username"
     ])
     df.to_excel("inactive_repos_graphql.xlsx", index=False)
-    print("Done. Saved to 'inactive_repos_graphql.xlsx'")
+    print("\nDone. Saved to 'inactive_repos_graphql.xlsx'")
 
 
 if __name__ == "__main__":
