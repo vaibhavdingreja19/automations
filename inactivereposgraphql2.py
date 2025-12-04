@@ -44,6 +44,10 @@ def run_graphql_query(query, variables=None):
 
 
 def get_all_repos():
+    """
+    Return ONLY non-archived repos for the org.
+    Archived repos are skipped.
+    """
     repos = []
     has_next_page = True
     end_cursor = None
@@ -59,6 +63,7 @@ def get_all_repos():
               }
               nodes {
                 name
+                isArchived
               }
             }
           }
@@ -67,7 +72,11 @@ def get_all_repos():
         variables = {"org": ORG_NAME, "cursor": end_cursor}
         result = run_graphql_query(query, variables)
         repos_data = result["data"]["organization"]["repositories"]
-        repos.extend([repo["name"] for repo in repos_data["nodes"]])
+
+        for repo in repos_data["nodes"]:
+            if not repo["isArchived"]:
+                repos.append(repo["name"])
+
         has_next_page = repos_data["pageInfo"]["hasNextPage"]
         end_cursor = repos_data["pageInfo"]["endCursor"]
 
@@ -139,11 +148,8 @@ def check_repo_all_branches_old(repo_name):
 def get_last_commit_default_branch(repo_name):
     """
     Use REST API to grab the last commit on the default branch.
-    This is MUCH cheaper than re-walking all branches.
-
     Returns (email, username) or (None, None).
     """
-    # First, get repo info to learn default branch
     repo_url = f"{REST_API_ROOT}/repos/{ORG_NAME}/{repo_name}"
     r_repo = requests.get(repo_url, headers=headers_rest)
 
@@ -156,7 +162,6 @@ def get_last_commit_default_branch(repo_name):
     if not default_branch:
         return None, None
 
-    # Now get the last commit on that default branch
     commits_url = f"{REST_API_ROOT}/repos/{ORG_NAME}/{repo_name}/commits"
     params = {"sha": default_branch, "per_page": 1}
     r_commits = requests.get(commits_url, headers=headers_rest, params=params)
@@ -181,7 +186,7 @@ def get_last_commit_default_branch(repo_name):
 
 def main():
     all_repos = get_all_repos()
-    print(f"Total repos found: {len(all_repos)}")
+    print(f"Total NON-archived repos found: {len(all_repos)}")
 
     # PASS 1: original fast detection of inactive repos
     inactive_repos = []
@@ -194,7 +199,7 @@ def main():
         except Exception as e:
             print(f"Error checking {repo}: {e}")
 
-    print(f"\nTotal inactive repos (all branches > {YEARS_THRESHOLD}y old): {len(inactive_repos)}")
+    print(f"\nTotal inactive NON-archived repos (all branches > {YEARS_THRESHOLD}y old): {len(inactive_repos)}")
 
     # PASS 2: for each inactive repo, get last commit info (default branch)
     records = []
