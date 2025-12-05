@@ -1,6 +1,12 @@
 import os
 import requests
 import pandas as pd
+import urllib3
+
+# -------- SSL WARNING (optional) --------
+# Disable "InsecureRequestWarning" for verify=False
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# ---------------------------------------
 
 # ---------------- CONFIG ----------------
 
@@ -20,6 +26,8 @@ OUTPUT_FILE = "inactive_repos_vcs_map.xlsx"
 COL_REPO = "Repository"
 COL_APP = "GitHub App"
 
+# Disable SSL verification for TeamCity (self-signed cert)
+VERIFY_SSL = False
 # ----------------------------------------
 
 
@@ -42,7 +50,7 @@ def get_all_vcs_roots():
         "?fields=vcs-root(id,name,properties(property(name,value)))"
     )
     print(f"Fetching VCS roots from: {url}")
-    r = requests.get(url, headers=teamcity_headers())
+    r = requests.get(url, headers=teamcity_headers(), verify=VERIFY_SSL)
     r.raise_for_status()
 
     data = r.json()
