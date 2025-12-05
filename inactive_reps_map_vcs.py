@@ -14,7 +14,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TEAMCITY_URL = os.getenv("TC_URL", "https://teamcity.jhancock.com")
 TEAMCITY_PAT = os.getenv("TC_PAT", "")  # or hard-code below
 
-# TEAMCITY_PAT = "YOUR_TEAMCITY_PAT_HERE"  # <-- optional: for local testing
+# TEAMCITY_PAT = "YOUR_TEAMCITY_PAT_HERE"  # <-- optional for local testing
 
 # Excel with inactive repos + GitHub App column
 INACTIVE_FILE = "inactive_repos_with_app.xlsx"
@@ -26,7 +26,7 @@ OUTPUT_FILE = "inactive_repos_vcs_map.xlsx"
 COL_REPO = "Repository"
 COL_APP = "GitHub App"
 
-# Disable SSL verification for TeamCity (self-signed cert)
+# Disable SSL verification for TeamCity (self-signed cert etc.)
 VERIFY_SSL = False
 # ----------------------------------------
 
@@ -42,44 +42,58 @@ def teamcity_headers():
 
 def get_all_vcs_roots():
     """
-    Fetch all VCS roots from TeamCity in one call, including their URL property.
+    Fetch ALL VCS roots from TeamCity, paging through results.
     Returns a list of dicts: {id, name, url}.
     """
-    url = (
-        f"{TEAMCITY_URL}/app/rest/vcs-roots"
-        "?fields=vcs-root(id,name,properties(property(name,value)))"
-    )
-    print(f"Fetching VCS roots from: {url}")
-    r = requests.get(url, headers=teamcity_headers(), verify=VERIFY_SSL)
-    r.raise_for_status()
+    all_roots = []
+    start = 0
+    page_size = 200  # adjust if you like
 
-    data = r.json()
-
-    # TeamCity JSON can use "vcs-root" or "vcsRoot" depending on version
-    roots_raw = data.get("vcs-root") or data.get("vcsRoot") or []
-
-    roots = []
-    for root in roots_raw:
-        vcs_id = root.get("id")
-        name = root.get("name", "")
-        url_val = ""
-
-        props = root.get("properties", {}).get("property", [])
-        for p in props:
-            if p.get("name") == "url":
-                url_val = p.get("value", "")
-                break
-
-        roots.append(
-            {
-                "id": vcs_id,
-                "name": name,
-                "url": url_val,
-            }
+    while True:
+        url = (
+            f"{TEAMCITY_URL}/app/rest/vcs-roots"
+            f"?locator=start:{start},count:{page_size}"
+            "&fields=vcs-root(id,name,properties(property(name,value)))"
         )
+        print(f"Fetching VCS roots from: {url}")
+        r = requests.get(url, headers=teamcity_headers(), verify=VERIFY_SSL)
+        r.raise_for_status()
 
-    print(f"Total VCS roots fetched: {len(roots)}")
-    return roots
+        data = r.json()
+        roots_raw = data.get("vcs-root") or data.get("vcsRoot") or []
+
+        if not roots_raw:
+            break  # no more pages
+
+        for root in roots_raw:
+            vcs_id = root.get("id")
+            name = root.get("name", "")
+            url_val = ""
+
+            props = root.get("properties", {}).get("property", [])
+            for p in props:
+                if p.get("name") == "url":
+                    url_val = p.get("value", "")
+                    break
+
+            all_roots.append(
+                {
+                    "id": vcs_id,
+                    "name": name,
+                    "url": url_val,
+                }
+            )
+
+        print(f"  Fetched {len(roots_raw)} roots in this page (total so far: {len(all_roots)})")
+
+        # If we got fewer than page_size, that was the last page
+        if len(roots_raw) < page_size:
+            break
+
+        start += page_size
+
+    print(f"Total VCS roots fetched: {len(all_roots)}")
+    return all_roots
 
 
 def main():
@@ -100,7 +114,7 @@ def main():
         print("No repos with GitHub App mapping found. Nothing to do.")
         return
 
-    # 2. Fetch all VCS roots once
+    # 2. Fetch all VCS roots once (with pagination)
     vcs_roots = get_all_vcs_roots()
 
     # 3. For each target repo, find matching VCS roots by URL
