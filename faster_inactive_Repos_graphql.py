@@ -46,43 +46,41 @@ def run_graphql_query(query, variables=None):
             print(f"Error {response.status_code}: {response.text}")
             time.sleep(10)
 
-
 def get_all_repos():
     """
     Return ONLY non-archived repos for the org.
+    Includes public + private + internal (whatever the token can access).
     Archived repos are skipped.
     """
     repos = []
-    has_next_page = True
-    end_cursor = None
+    url = f"{REST_API_ROOT}/orgs/{ORG_NAME}/repos"
+    params = {"per_page": 100, "type": "all"}  # type=all includes internal/private/public as accessible
 
-    while has_next_page:
-        query = """
-        query($org: String!, $cursor: String) {
-          organization(login: $org) {
-            repositories(first: 50, after: $cursor) {
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-              nodes {
-                name
-                isArchived
-              }
-            }
-          }
-        }
-        """
-        variables = {"org": ORG_NAME, "cursor": end_cursor}
-        result = run_graphql_query(query, variables)
-        repos_data = result["data"]["organization"]["repositories"]
+    while url:
+        r = requests.get(url, headers=headers_rest, params=params)
 
-        for repo in repos_data["nodes"]:
-            if not repo["isArchived"]:
+        if r.status_code != 200:
+            print(f"REST: Error listing org repos: {r.status_code} - {r.text}")
+            time.sleep(10)
+            continue
+
+        data = r.json()
+        for repo in data:
+            if not repo.get("archived", False):
                 repos.append(repo["name"])
 
-        has_next_page = repos_data["pageInfo"]["hasNextPage"]
-        end_cursor = repos_data["pageInfo"]["endCursor"]
+        # Pagination via Link header
+        next_url = None
+        link = r.headers.get("Link", "")
+        if link:
+            parts = [p.strip() for p in link.split(",")]
+            for p in parts:
+                if 'rel="next"' in p:
+                    next_url = p[p.find("<") + 1 : p.find(">")]
+                    break
+
+        url = next_url
+        params = None  # next_url already contains the query params
 
     return repos
 
