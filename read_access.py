@@ -1,104 +1,112 @@
-import requests
+import os
 import time
+import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-ORG = "JHDevOps"
-TOKEN = ""
+DEFAULT_ORG = "JHDevOps"
+DEFAULT_PERMISSION = "pull"
+DEFAULT_WORKERS = 8
 
-REPOS = [
-    "repo-one",
-    "repo-two",
-    "repo-three",
-]
+def load_repos_from_multiline(text):
+    repos = []
+    seen = set()
+    for line in (text or "").splitlines():
+        name = line.strip()
+        if not name or name.startswith("#"):
+            continue
+        if name not in seen:
+            repos.append(name)
+            seen.add(name)
+    return repos
 
-MODE = "team"      
-TEAM_SLUG = ""     
-# USERNAME = ""      
-
-PERMISSION = "pull"
-MAX_WORKERS = 8
-DRY_RUN = False
-
-session = requests.Session()
-session.headers.update({
-    "Authorization": f"token {TOKEN}",
-    "Accept": "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28",
-})
-
-def put_request(url, payload=None):
-    retries = 5
+def put_request(session, url, payload=None, retries=5):
+    last = None
     for attempt in range(retries):
-        response = session.put(url, json=payload)
+        r = session.put(url, json=payload)
+        last = r
 
-        if response.status_code == 403 and "rate limit" in response.text.lower():
-            reset = response.headers.get("X-RateLimit-Reset")
+        if r.status_code == 403 and "rate limit" in r.text.lower():
+            reset = r.headers.get("X-RateLimit-Reset")
             wait_time = 30
             if reset and reset.isdigit():
                 wait_time = max(1, int(reset) - int(time.time()) + 2)
             time.sleep(wait_time)
             continue
 
-        if response.status_code in (500, 502, 503, 504):
+        if r.status_code in (500, 502, 503, 504):
             time.sleep(2 ** attempt)
             continue
 
-        return response
+        return r
 
-    return response
+    return last
 
-def give_team_access(repo):
-    url = f"https://api.github.com/orgs/{ORG}/teams/{TEAM_SLUG}/repos/{ORG}/{repo}"
-    payload = {"permission": PERMISSION}
+def grant_team_access(session, org, team_slug, repo, permission):
+    url = f"https://api.github.com/orgs/{org}/teams/{team_slug}/repos/{org}/{repo}"
+    payload = {"permission": permission}
+    r = put_request(session, url, payload=payload)
 
-    if DRY_RUN:
-        return repo, True, "dry run"
-
-    response = put_request(url, payload)
-    success = response.status_code in (201, 204)
-    return repo, success, f"{response.status_code} {response.text}"
-
-def give_user_access(repo):
-    url = f"https://api.github.com/repos/{ORG}/{repo}/collaborators/{USERNAME}"
-    payload = {"permission": PERMISSION}
-
-    if DRY_RUN:
-        return repo, True, "dry run"
-
-    response = put_request(url, payload)
-    success = response.status_code in (201, 202, 204)
-    return repo, success, f"{response.status_code} {response.text}"
+    ok = r.status_code in (201, 204)
+    body = (r.text or "").strip()
+    if len(body) > 400:
+        body = body[:400] + "..."
+    return repo, ok, f"{r.status_code} {body}"
 
 def main():
-    if MODE == "team" and not TEAM_SLUG:
-        raise ValueError("TEAM_SLUG is required when MODE is team")
+    org = os.getenv("GH_ORG", DEFAULT_ORG).strip()
+    token = os.getenv("GH_TOKEN", "").strip()
+    team_slug = os.getenv("GH_TEAM_SLUG", "").strip()
 
-    if MODE == "user" and not USERNAME:
-        raise ValueError("USERNAME is required when MODE is user")
+    permission = os.getenv("GH_PERMISSION", DEFAULT_PERMISSION).strip()
+    workers = int(os.getenv("GH_WORKERS", str(DEFAULT_WORKERS)))
+    dry_run = os.getenv("DRY_RUN", "false").strip().lower() in ("1", "true", "yes")
 
-    action = give_team_access if MODE == "team" else give_user_access
+    repos_text = os.getenv("REPOS", "")
+    repos = load_repos_from_multiline(repos_text)
 
-    print("organization:", ORG)
-    print("mode:", MODE)
-    print("permission:", PERMISSION)
-    print("repositories:", len(REPOS))
-    print("-" * 50)
+    if not token:
+        raise ValueError("Missing GH_TOKEN (set env.GH_TOKEN in TeamCity)")
+    if not team_slug:
+        raise ValueError("Missing GH_TEAM_SLUG (set env.GH_TEAM_SLUG in TeamCity)")
+    if not repos:
+        raise ValueError("No repos found. Set env.REPOS as multi-line: one repo name per line")
+
+    session = requests.Session()
+    session.headers.update({
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    })
+
+    print("org:", org)
+    print("team:", team_slug)
+    print("permission:", permission)
+    print("repos:", len(repos))
+    print("dry_run:", dry_run)
+    print("-" * 60)
 
     results = []
 
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = [executor.submit(action, repo) for repo in REPOS]
-        for future in as_completed(futures):
-            results.append(future.result())
+    if dry_run:
+        for repo in repos:
+            print(repo, "->", "dry run")
+        print("-" * 60)
+        print("completed:", len(repos), "/", len(repos))
+        return
 
-    success_count = 0
-    for repo, success, message in sorted(results):
-        print(repo, "->", message[:300])
-        if success:
-            success_count += 1
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(grant_team_access, session, org, team_slug, repo, permission) for repo in repos]
+        for fut in as_completed(futures):
+            results.append(fut.result())
 
-    print("-" * 50)
-    print("completed:", success_count, "/", len(REPOS))
+    ok_count = 0
+    for repo, ok, msg in sorted(results, key=lambda x: x[0].lower()):
+        print(repo, "->", msg)
+        if ok:
+            ok_count += 1
+
+    print("-" * 60)
+    print("completed:", ok_count, "/", len(repos))
 
 if __name__ == "__main__":
     main()
