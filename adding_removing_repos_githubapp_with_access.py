@@ -188,10 +188,14 @@ def grant_team_repo_access_read(pat: str, org: str, repo: str, team_slug: str):
 
 
 def run():
-    if APP_SLUG not in APPS:
-        raise SystemExit(f"Unknown APP_SLUG '{APP_SLUG}'. Choose one of: {list(APPS.keys())}")
+    
     if ACTION not in ("add", "remove"):
         raise SystemExit("ACTION must be 'add' or 'remove'")
+
+    
+    if ACTION == "add" and APP_SLUG not in APPS:
+        raise SystemExit(f"Unknown APP_SLUG '{APP_SLUG}'. Choose one of: {list(APPS.keys())}")
+
     if not USER_PAT or USER_PAT.startswith("ghp_your_PAT_here"):
         raise SystemExit("Set USER_PAT at the top (needs to be an org admin PAT).")
     if "/" not in REPO_FULLNAME:
@@ -199,12 +203,13 @@ def run():
 
     repo_owner, _ = REPO_FULLNAME.split("/", 1)
 
-    
     repo_id = repo_id_with_pat(USER_PAT, REPO_FULLNAME)
     log.info("Repo id for %s is %s", REPO_FULLNAME, repo_id)
 
     
     found = find_repo_in_any_app(repo_id)
+
+    
     if ACTION == "add" and found:
         slug, inst_id = found
         log.info("Repo %s is already part of app '%s' (installation %s). Skipping.",
@@ -212,7 +217,24 @@ def run():
         return
 
     
-    cfg = APPS[APP_SLUG]
+    installation_id_override = None
+    effective_app_slug = APP_SLUG
+
+    if ACTION == "remove":
+        if not found:
+            log.info("Repo %s is not part of any configured GitHub App installation. Nothing to remove.", REPO_FULLNAME)
+            return
+
+        found_slug, found_inst_id = found
+        effective_app_slug = found_slug
+        installation_id_override = found_inst_id
+
+        if APP_SLUG != found_slug:
+            log.info("Repo %s is part of app '%s' (installation %s). Ignoring requested APP_SLUG '%s' for removal.",
+                     REPO_FULLNAME, found_slug, found_inst_id, APP_SLUG)
+
+    
+    cfg = APPS[effective_app_slug]
     app_id = cfg["id"]
     private_key = cfg["private_key"]
 
@@ -225,11 +247,13 @@ def run():
     installs = get_installations(jwt_token)
     if not installs:
         raise SystemExit("This app has no installations.")
-    installation_id = pick_installation(installs, repo_owner)
+
+    
+    installation_id = installation_id_override if installation_id_override else pick_installation(installs, repo_owner)
+
     owner = [i for i in installs if i["id"] == installation_id][0]["account"]["login"]
     log.info("Chosen installation %s on owner '%s'", installation_id, owner)
 
-    
     is_member = installation_has_repo(jwt_token, installation_id, repo_id)
     if ACTION == "add" and is_member:
         log.info("Repo %s is already part of this app installation %s. Skipping.", REPO_FULLNAME, installation_id)
@@ -242,7 +266,6 @@ def run():
              "Adding" if ACTION == "add" else "Removing", REPO_FULLNAME, installation_id)
     if ACTION == "add":
         add_repo_with_user_pat(USER_PAT, installation_id, repo_id)
-        # CONDITIONAL: only grant team READ access if TeamCity param says "yes"
         if TEAM_ACL_READ == "yes":
             grant_team_repo_access_read(USER_PAT, repo_owner, REPO_FULLNAME.split("/", 1)[1], READ_TEAM_SLUG)
         else:
