@@ -7,3 +7,26 @@ The team noted that the cloud license expired in August, and no new work can beg
 Due to the current code freeze, scans cannot be run in CxOne as the old on-prem instance is blocked. Once the purchase order is approved, both on-prem and cloud environments will be available again. Until then, Checkmarx and Manulife are coordinating to obtain an exemption allowing temporary use.
 
 Additionally, the team will attempt to configure scans for the TeamCity production environment. Although the license limitation may prevent successful execution, the setup process will be initiated. Dan has a follow-up meeting scheduled at 12:30 PM today with Checkmarx representatives to receive further updates and will share the outcomes afterward.
+
+
+
+#!/bin/bash
+
+# 1. Extract scanId from TeamCity build log
+SCAN_ID=$(grep -oE "Scan ID: [a-z0-9-]+" "$TEAMCITY_BUILD_TEMP/build.log" | awk '{print $3}' | tail -1)
+
+echo "Detected Scan ID: $SCAN_ID"
+
+# 2. CX1 token (store securely as TeamCity parameter)
+CX1_TOKEN="%cx1.api.token%"
+CX1_URL="https://<your-tenant>.checkmarx.net"
+
+# 3. Build metadata
+COMMENT="TC Build=%build.counter% | Branch=%teamcity.build.branch%"
+
+# 4. PATCH scan with comment
+curl -s -X PATCH \
+  "$CX1_URL/api/sast/scans/$SCAN_ID" \
+  -H "Authorization: Bearer $CX1_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"comment\":\"$COMMENT\"}"
