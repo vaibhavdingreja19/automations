@@ -30,3 +30,37 @@ curl -s -X PATCH \
   -H "Authorization: Bearer $CX1_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"comment\":\"$COMMENT\"}"
+
+
+
+Hi Dan and team,
+
+Here are the updates and findings on the action items discussed, along with proposed timelines.
+
+Status updates (re: option #1 – immediate approach):
+	•	CX1 project names have been updated to match the corresponding GitHub repository names.
+	•	VCS triggers have been enabled for the existing projects.
+	•	The additional JH ANN repository has been set up in CX1.
+	•	TeamCity job configuration and triggers are now aligned with the CX1 setup.
+
+Investigation: Passing branch & TeamCity build number to CX1
+	•	Branch name is supported and is already being passed via the new Checkmarx One AST runner.
+	•	TeamCity build number cannot be passed directly using the new CX1 AST runner (unlike legacy CxSAST).
+	•	The AST runner does not expose a comments or metadata field for persisting CI build numbers.
+	•	We are currently exploring a workaround by adding an additional TeamCity build step (command-line) after the AST scan to pass build metadata (build number, branch) to CX1 using supported APIs.
+
+GitHub App integration
+	•	We do not see the GitHub App integration option available in our CX1 tenant UI.
+	•	Documentation exists, but the feature appears to be tenant / license / feature-flag dependent.
+	•	Recommendation: Dan to reach out to Checkmarx One Support to confirm:
+	•	Whether the GitHub App integration feature flag is enabled for our tenant
+	•	Whether our current CX1 license includes GitHub App integration
+	•	Expected availability timeline if not currently enabled
+
+Target date
+	•	Proposed target to complete the remaining investigation and align on next steps: 27th Jan 2026
+
+Please let us know if you’d like us to proceed with implementing the additional TeamCity build step for passing metadata, or if you’d prefer to wait for guidance from Checkmarx Support regarding GitHub App integration.
+
+Thanks,
+Vaibhav
